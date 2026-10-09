@@ -1,0 +1,108 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-002",
+  "summary": "Implement five-minute snapshots and safe application restore",
+  "workstream": "application",
+  "classification": {
+    "kind": "FEATURE",
+    "priority": "P1",
+    "origin": "requested"
+  },
+  "allowedPaths": [
+    "project/ticket-002/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/__init__.py",
+    "src/uncrash/cli.py",
+    "src/uncrash/contracts.py",
+    "src/uncrash/diagnostics.py",
+    "src/uncrash/events.py",
+    "src/uncrash/inventory.py",
+    "src/uncrash/native.py",
+    "src/uncrash/recovery.py",
+    "src/uncrash/runtime.py",
+    "src/uncrash/snapshot.rs",
+    "src/uncrash/store.py",
+    "src/uncrash/systemd/uncrash.service",
+    "tests/test_native.py",
+    "tests/test_recovery.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [
+    "ticket-001"
+  ],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "bce86848c1f4a1a790f02b5ae77b4b3217918ef2",
+    "targetBranch": "main",
+    "outcome": "Implement five-minute snapshots and safe application restore",
+    "nonGoals": [
+      "modify unrelated files"
+    ],
+    "complexity": "L",
+    "estimatedMinutes": 120,
+    "budgets": {
+      "maxImplementationFiles": 15,
+      "maxAffectedComponents": 2,
+      "maxPublicInterfaceChanges": 1,
+      "maxRuntimeDependencies": 1
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Snapshot runtime and application restore engine",
+      "components": [
+        {
+          "name": "runtime",
+          "paths": [
+            "src/uncrash/__init__.py",
+            "src/uncrash/cli.py",
+            "src/uncrash/contracts.py",
+            "src/uncrash/diagnostics.py",
+            "src/uncrash/events.py",
+            "src/uncrash/inventory.py",
+            "src/uncrash/native.py",
+            "src/uncrash/recovery.py",
+            "src/uncrash/runtime.py",
+            "src/uncrash/snapshot.rs",
+            "src/uncrash/store.py",
+            "src/uncrash/systemd/uncrash.service"
+          ]
+        },
+        {
+          "name": "tests",
+          "paths": [
+            "tests/test_native.py",
+            "tests/test_recovery.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [
+        "uncrash CLI and snapshot engine"
+      ],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "revert runtime implementation"
+    },
+    "runtimeDependencies": [
+      "cryptography>=41"
+    ],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "./project/governance-check.sh"
+        ],
+        "evidence": "governance passes"
+      }
+    ]
+  }
+}
