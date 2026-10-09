@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uncrash"
+version = "0.1.2"
+description = "Fast local recovery snapshots with optional encryption"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Tomasz Sapletta Prototypowanie.pl" }]
+dependencies = ["cryptography>=41"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: System :: Archiving :: Backup",
+]
+
+[project.optional-dependencies]
+api = ["fastapi>=0.110", "uvicorn>=0.28"]
+mcp = ["mcp>=1.0"]
+all = ["fastapi>=0.110", "uvicorn>=0.28", "mcp>=1.0"]
+
+
+[project.scripts]
+uncrash = "uncrash.cli:main"
+close-last-pycharm = "uncrash.cli:main_pycharm"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+uncrash = ["systemd/*.service", "snapshot.rs", "errors/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -p wellmanifest_governance"
+
+[tool.setuptools.data-files]
+"share/uncrash" = [".env.example"]
+
+[tool.wellmanifest]
+standard = "0.20.91"
+revision = "a8c1f9a6ff46d957195b8b5814c5c4df9e0a28d2"
+gate = "project/governance-check.sh"
+
