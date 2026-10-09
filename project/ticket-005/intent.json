@@ -1,0 +1,90 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-005",
+  "summary": "Implement multi-protocol API and extended diagnostics",
+  "workstream": "application",
+  "classification": {
+    "kind": "FEATURE",
+    "priority": "P2",
+    "origin": "requested"
+  },
+  "allowedPaths": [
+    "project/ticket-005/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/api.py",
+    "tests/test_api.py",
+    "tests/test_application_matrix.py",
+    "tests/test_diagnostics.py",
+    "tests/test_local_backends.py",
+    "tests/test_novnc.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [
+    "ticket-002"
+  ],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "7d533af59072ce2a3c9b85036ab4b9e59e3bed2b",
+    "targetBranch": "main",
+    "outcome": "Implement multi-protocol API and extended diagnostics",
+    "nonGoals": [
+      "modify unrelated files"
+    ],
+    "complexity": "M",
+    "estimatedMinutes": 60,
+    "budgets": {
+      "maxImplementationFiles": 9,
+      "maxAffectedComponents": 3,
+      "maxPublicInterfaceChanges": 2,
+      "maxRuntimeDependencies": 2
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Multi-protocol API and extended diagnostics test suites",
+      "components": [
+        {
+          "name": "api",
+          "paths": [
+            "src/uncrash/api.py"
+          ]
+        },
+        {
+          "name": "tests",
+          "paths": [
+            "tests/test_api.py",
+            "tests/test_application_matrix.py",
+            "tests/test_diagnostics.py",
+            "tests/test_local_backends.py",
+            "tests/test_novnc.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [
+        "uncrash REST and MCP endpoints"
+      ],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "revert api and test implementation"
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "./project/governance-check.sh"
+        ],
+        "evidence": "governance passes"
+      }
+    ]
+  }
+}
