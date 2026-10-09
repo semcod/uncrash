@@ -466,3 +466,33 @@ def test_cli_pycharm_subcommand(tmp_path, capsys, monkeypatch):
     out = json.loads(capsys.readouterr().out)
     assert out['status'] == 'planned'
 
+
+def test_environment_file_resolution_prioritizes_user_config_over_home_env(monkeypatch, tmp_path, capsys):
+    from uncrash.cli import main
+    fake_home = tmp_path / 'home'
+    fake_home.mkdir()
+    # Unrelated .env in user's home directory (e.g. third-party API keys)
+    (fake_home / '.env').write_text('UNRELATED_API_KEY=secret\nSOME_OTHER_VAR=123\n')
+
+    # Dedicated uncrash config in ~/.config/uncrash/.env
+    uncrash_config_dir = fake_home / '.config/uncrash'
+    uncrash_config_dir.mkdir(parents=True)
+    (uncrash_config_dir / '.env').write_text('UNCRASH_ENCRYPT=false\nUNCRASH_SNAPSHOT_ENGINE=rust\n')
+
+    # Prepare JetBrains fixture in fake home
+    settings = fake_home / '.config/JetBrains/PyCharm2026.2/options'
+    settings.mkdir(parents=True)
+    (settings / 'recentProjects.xml').write_text('<application><entry key="$USER_HOME$/test-proj"><RecentProjectMetaInfo opened="true"/></entry></application>')
+
+    monkeypatch.setenv('HOME', str(fake_home))
+    monkeypatch.setenv('XDG_SESSION_TYPE', 'wayland')
+    monkeypatch.delenv('UNCRASH_ENV_FILE', raising=False)
+    monkeypatch.chdir(fake_home)
+
+    # Executing from $HOME should load ~/.config/uncrash/.env without failing on $HOME/.env
+    code = main(['pycharm', '--dry-run', '--restore', '--executable', '/bin/true'])
+    assert code == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out['status'] == 'planned'
+
+

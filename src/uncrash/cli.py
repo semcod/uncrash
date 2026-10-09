@@ -235,8 +235,18 @@ def main(argv=None):
                 uvicorn.run(server.streamable_http_app(), host=args.host, port=args.port)
             return 0
 
-        env_path = args.env_file or (Path(os.environ['UNCRASH_ENV_FILE']).expanduser() if os.environ.get('UNCRASH_ENV_FILE') else
-            Path.cwd()/'.env' if (Path.cwd()/'.env').exists() else Path.home()/'.config/uncrash/.env')
+        user_config_env = Path.home()/'.config/uncrash/.env'
+        cwd_env = Path.cwd()/'.env'
+        if args.env_file:
+            env_path = args.env_file
+        elif os.environ.get('UNCRASH_ENV_FILE'):
+            env_path = Path(os.environ['UNCRASH_ENV_FILE']).expanduser()
+        elif user_config_env.exists():
+            env_path = user_config_env
+        elif cwd_env.exists() and cwd_env.resolve() != (Path.home()/'.env').resolve():
+            env_path = cwd_env
+        else:
+            env_path = user_config_env
         if args.env_file and not env_path.exists(): raise RecoveryError('Requested environment file does not exist')
         settings = environment_settings(env_path, include_defaults=False)
         args.state = args.state or Path(settings.pop('state_dir', Path.home()/'.local/state/uncrash'))
