@@ -1,0 +1,1732 @@
+{
+  "schema": "uncrash.application-recovery-report/v1",
+  "date": "2026-10-08",
+  "summary": {
+    "inventory_entries": 191,
+    "generic_fixtures": 52,
+    "fixture_statuses": {
+      "DATA_AND_WINDOW_PASS": 35,
+      "NO_WINDOW_IN_ISOLATED_FIXTURE": 17
+    },
+    "inventory_statuses": {
+      "DATA_AND_WINDOW_PASS": 33,
+      "ADAPTER_OR_FIXTURE_REQUIRED": 107,
+      "EXECUTABLE_MISSING": 6,
+      "NATIVE_PROFILE_PASS_LAUNCHER_PENDING": 2,
+      "DURABLE_FILE_REPLAY_PASS": 1,
+      "NO_WINDOW_IN_ISOLATED_FIXTURE": 42
+    },
+    "full_vm_tested": false,
+    "chat_adapters_available": false
+  },
+  "applications": [
+    {
+      "id": "ai.opencode.desktop",
+      "name": "OpenCode",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "antigravity-ide",
+      "name": "Antigravity IDE",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "antigravity-url-handler",
+      "name": "Antigravity - URL Handler",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "antigravity",
+      "name": "Antigravity",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "apport-gtk",
+      "name": "Report a problem...",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "blender",
+      "name": "Blender",
+      "status": "EXECUTABLE_MISSING",
+      "reason": "Launcher exists but its executable was not resolved.",
+      "native_session_verified": false
+    },
+    {
+      "id": "bluetooth-sendto",
+      "name": "Bluetooth Transfer",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "ccsm",
+      "name": "CompizConfig Settings Manager",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "com.google.Chrome",
+      "name": "Google Chrome",
+      "status": "NATIVE_PROFILE_PASS_LAUNCHER_PENDING",
+      "reason": "Chrome native binary restored two saved tabs and localStorage in noVNC; desktop wrapper launch was not separately exercised.",
+      "native_session_verified": true
+    },
+    {
+      "id": "com.microsoft.VSCode.UrlHandler",
+      "name": "Visual Studio Code - URL Handler",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "com.microsoft.VSCode",
+      "name": "Visual Studio Code",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "com.teamviewer.TeamViewer",
+      "name": "TeamViewer",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "compiz",
+      "name": "Compiz",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "cursor-url-handler",
+      "name": "Cursor - URL Handler",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "cursor",
+      "name": "Cursor",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "debian-uxterm",
+      "name": "UXTerm",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "debian-xterm",
+      "name": "XTerm",
+      "status": "DURABLE_FILE_REPLAY_PASS",
+      "reason": "Saved file replay verified in noVNC; no live PTY/scrollback restoration.",
+      "native_session_verified": false
+    },
+    {
+      "id": "dev.warp.Warp",
+      "name": "Warp",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "devin-desktop-url-handler",
+      "name": "Devin - URL Handler",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "devin-desktop",
+      "name": "Devin",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "exef",
+      "name": "ExEF Desktop",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gcr-prompter",
+      "name": "Access Prompt",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gcr-viewer",
+      "name": "View file",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "geoclue-demo-agent",
+      "name": "Geoclue Demo agent",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-about-panel",
+      "name": "About",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-applications-panel",
+      "name": "Apps",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-background-panel",
+      "name": "Appearance",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-bluetooth-panel",
+      "name": "Bluetooth",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-color-panel",
+      "name": "Color Management",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-datetime-panel",
+      "name": "Date & Time",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-disk-image-mounter",
+      "name": "Disk Image Mounter",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-disk-image-writer",
+      "name": "Disk Image Writer",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-display-panel",
+      "name": "Displays",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-initial-setup",
+      "name": "Initial Setup",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-keyboard-panel",
+      "name": "Keyboard",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-language-selector",
+      "name": "Language Support",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-mouse-panel",
+      "name": "Mouse & Touchpad",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-multitasking-panel",
+      "name": "Multitasking",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-network-panel",
+      "name": "Network",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-notifications-panel",
+      "name": "Notifications",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-online-accounts-panel",
+      "name": "Online Accounts",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-power-panel",
+      "name": "Power",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-printers-panel",
+      "name": "Printers",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-privacy-panel",
+      "name": "Privacy & Security",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-region-panel",
+      "name": "Region & Language",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-search-panel",
+      "name": "Search",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-sharing-panel",
+      "name": "Sharing",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-sound-panel",
+      "name": "Sound",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-system-monitor-kde",
+      "name": "GNOME System Monitor",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-system-panel",
+      "name": "System",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-ubuntu-panel",
+      "name": "Ubuntu Desktop",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-universal-access-panel",
+      "name": "Accessibility",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-users-panel",
+      "name": "Users",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-wacom-panel",
+      "name": "Graphics Tablets",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-wellbeing-panel",
+      "name": "Wellbeing",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-wifi-panel",
+      "name": "Wi-Fi",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gnome-wwan-panel",
+      "name": "Mobile Network",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "google-chrome",
+      "name": "Google Chrome",
+      "status": "NATIVE_PROFILE_PASS_LAUNCHER_PENDING",
+      "reason": "Chrome native binary restored two saved tabs and localStorage in noVNC; desktop wrapper launch was not separately exercised.",
+      "native_session_verified": true
+    },
+    {
+      "id": "grok-bot",
+      "name": "Grok Bot",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "hplj1020",
+      "name": "Reactivate HP LaserJet 1018/1020 after reloading paper",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "htop",
+      "name": "Htop",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "ibus-setup-table",
+      "name": "IBus Table Preferences",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "idle-python3.13",
+      "name": "IDLE (using Python-3.13)",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "idle",
+      "name": "IDLE",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "im-config",
+      "name": "Input Method",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "info",
+      "name": "TeXInfo",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "io.snapcraft.SessionAgent",
+      "name": "Snapd User Session Agent",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "nautilus-autorun-software",
+      "name": "Run Software",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "nm-connection-editor",
+      "name": "Advanced Network Configuration",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "nvidia-settings",
+      "name": "NVIDIA X Server Settings",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "nvtop",
+      "name": "nvtop",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "openbox",
+      "name": "Openbox",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "opencode-desktop",
+      "name": "OpenCode",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.freedesktop.IBus.Panel.Emojier",
+      "name": "Emoji Choice",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.freedesktop.IBus.Panel.Extension.Gtk3",
+      "name": "Emoji Choice",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.freedesktop.IBus.Panel.Wayland.Gtk3",
+      "name": "IBus Wayland",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.freedesktop.IBus.Setup",
+      "name": "IBus Preferences",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.freedesktop.Xwayland",
+      "name": "Xwayland",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Calculator",
+      "name": "Calculator",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Characters",
+      "name": "Characters",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.DiskUtility",
+      "name": "Disks",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Evince-previewer",
+      "name": "Print Preview",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Evince",
+      "name": "Evince",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Evolution-alarm-notify",
+      "name": "Events and Tasks Reminders",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Logs",
+      "name": "Logs",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Nautilus",
+      "name": "Files",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.OnlineAccounts.OAuth2",
+      "name": "GNOME OAuth2 Handler",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.PackageUpdater",
+      "name": "Package Updater",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Papers-previewer",
+      "name": "Print Preview",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Papers",
+      "name": "Document Viewer",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.PowerStats",
+      "name": "Power Statistics",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.RemoteDesktop.Handover",
+      "name": "GNOME Remote Desktop Handover Daemon",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Screenshot",
+      "name": "Screenshot",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Settings",
+      "name": "Settings",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Shell.Extensions",
+      "name": "Extensions",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Sysprof",
+      "name": "Sysprof",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.SystemMonitor",
+      "name": "System Monitor",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Tecla",
+      "name": "Tecla",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Terminal.Preferences",
+      "name": "Terminal Preferences",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Terminal",
+      "name": "Terminal",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.TextEditor",
+      "name": "Text Editor",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Yelp",
+      "name": "Help",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.Zenity",
+      "name": "Zenity",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.baobab",
+      "name": "Disk Usage Analyzer",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.clocks",
+      "name": "Clocks",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.eog",
+      "name": "Eye of GNOME",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.evolution-data-server.OAuth2-handler",
+      "name": "Evolution Data Server OAuth2 Handler",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.font-viewer",
+      "name": "Fonts",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.gnome.seahorse.Application",
+      "name": "Passwords and Keys",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.raspberrypi.rpi-imager",
+      "name": "Imager",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.remmina.Remmina-file",
+      "name": "Remmina Connect",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.remmina.Remmina",
+      "name": "Remmina",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.rncbc.qjackctl",
+      "name": "QjackCtl",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.rnd2.cpupower_gui",
+      "name": "cpupower-gui",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "org.strawberrymusicplayer.strawberry",
+      "name": "Strawberry",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "python3.12",
+      "name": "Python (v3.12)",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "python3.13",
+      "name": "Python (v3.13)",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "qemu",
+      "name": "QEMU",
+      "status": "EXECUTABLE_MISSING",
+      "reason": "Launcher exists but its executable was not resolved.",
+      "native_session_verified": false
+    },
+    {
+      "id": "qoder-url-handler",
+      "name": "Qoder - URL Handler",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "qoder",
+      "name": "Qoder",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "remmina-gnome",
+      "name": "remmina-gnome",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "remote-viewer",
+      "name": "Remote Viewer",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "rygel",
+      "name": "Rygel",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "snap-handle-link",
+      "name": "Handler for snap:// URIs",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "software-properties-drivers",
+      "name": "Additional Drivers",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "software-properties-gtk",
+      "name": "Software & Updates",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "software-properties-livepatch",
+      "name": "Livepatch",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "teamviewer8",
+      "name": "TeamViewer",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "teamviewerapi",
+      "name": "TeamViewer",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "tvoneweblogin",
+      "name": "TeamViewer",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "update-manager",
+      "name": "Software Updater",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "user-dirs-update-gtk",
+      "name": "User folders update",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "vim",
+      "name": "Vim",
+      "status": "EXECUTABLE_MISSING",
+      "reason": "Launcher exists but its executable was not resolved.",
+      "native_session_verified": false
+    },
+    {
+      "id": "virt-manager",
+      "name": "Virtual Machine Manager",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "xdg-desktop-portal-gnome",
+      "name": "Portal",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "xdg-desktop-portal-gtk",
+      "name": "Portal",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "xtigervncviewer",
+      "name": "TigerVNC viewer",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "analytica-handler",
+      "name": "Analytica URI Handler",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "antigravity-ide",
+      "name": "Antigravity IDE",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "claude-code-url-handler",
+      "name": "Claude Code URL Handler",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "cursor",
+      "name": "Cursor",
+      "status": "EXECUTABLE_MISSING",
+      "reason": "Launcher exists but its executable was not resolved.",
+      "native_session_verified": false
+    },
+    {
+      "id": "dev.zed.Zed-Preview",
+      "name": "Zed Preview",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "dev.zed.Zed",
+      "name": "Zed",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "gravhub-work",
+      "name": "Gravhub work",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "jetbrains-gateway-8e1abd79-8e1d-41e0-9158-a5b6bbab84ab",
+      "name": "Gateway 2026.2.2",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "jetbrains-gateway",
+      "name": "JetBrains Gateway",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "jetbrains-idea-ce-3b5cc8d5-b975-47f5-bcc7-e6f24dcd2620",
+      "name": "IntelliJ IDEA 2026.2.3",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "jetbrains-pycharm-1d3ce761-8984-41ea-b6b5-67fa02273f74",
+      "name": "PyCharm 2026.3 EAP",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "jetbrains-studio-4a4b83b8-354b-4c7a-bffe-3ab5bf2f0f1d",
+      "name": "Android Studio Rabbit 1 2026.2.1",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "jetbrains-toolbox",
+      "name": "JetBrains Toolbox",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "jetbrains-webstorm-315c4a27-c7f2-44ff-8d4d-13b0a6e5932a",
+      "name": "WebStorm 2026.2.3",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "jetbrains-webstorm-9114729f-e27c-4234-a248-21cf8fd37f07",
+      "name": "WebStorm 2026.2.3",
+      "status": "DATA_AND_WINDOW_PASS",
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified.",
+      "native_session_verified": false
+    },
+    {
+      "id": "jetbrainsd",
+      "name": "JetBrains",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "multigravity-work",
+      "name": "Multigravity work",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "zcode",
+      "name": "ZCode",
+      "status": "EXECUTABLE_MISSING",
+      "reason": "Launcher exists but its executable was not resolved.",
+      "native_session_verified": false
+    },
+    {
+      "id": "chromium_chromium",
+      "name": "Chromium Web Browser",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "chromium_daemon",
+      "name": "Chromium Web Browser",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "clementine_clementine",
+      "name": "Clementine",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "code-insiders_code-insiders-url-handler",
+      "name": "Visual Studio Code - Insiders - URL Handler",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "code-insiders_code-insiders",
+      "name": "Visual Studio Code - Insiders",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "code_code-url-handler",
+      "name": "Visual Studio Code - URL Handler",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "code_code",
+      "name": "Visual Studio Code",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "codium_codium",
+      "name": "VSCodium",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "codium_url-handler",
+      "name": "VSCodium - URL Handler",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "desktop-security-center_desktop-security-center",
+      "name": "Security Center",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "dragon_dragon",
+      "name": "Dragon Player",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "firefox_firefox",
+      "name": "Firefox",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "firmware-updater_firmware-updater-app",
+      "name": "Firmware Updater",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "firmware-updater_firmware-updater",
+      "name": "Firmware Updater",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "libreoffice_base",
+      "name": "LibreOffice 26.2 Base",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "libreoffice_calc",
+      "name": "LibreOffice 26.2 Calc",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "libreoffice_draw",
+      "name": "LibreOffice 26.2 Draw",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "libreoffice_impress",
+      "name": "LibreOffice 26.2 Impress",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "libreoffice_libreoffice",
+      "name": "LibreOffice 26.2",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM.",
+      "native_session_verified": false
+    },
+    {
+      "id": "libreoffice_math",
+      "name": "LibreOffice 26.2 Math",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "libreoffice_writer",
+      "name": "LibreOffice 26.2 Writer",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "opencode_desktop",
+      "name": "OpenCode Desktop",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "prompting-client_daemon",
+      "name": "Prompting Client",
+      "status": "EXECUTABLE_MISSING",
+      "reason": "Launcher exists but its executable was not resolved.",
+      "native_session_verified": false
+    },
+    {
+      "id": "pycharm-professional_pycharm-professional",
+      "name": "PyCharm",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "rpi-imager_rpi-imager",
+      "name": "Raspberry Pi Imager",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "snap-store_packagekit-session-installer",
+      "name": "App Center",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "snap-store_show-updates",
+      "name": "App Center Updates",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "snap-store_snap-store",
+      "name": "App Center",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "snapd-desktop-integration_snapd-desktop-integration",
+      "name": "App Updates",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "sublime-text_subl",
+      "name": "Sublime Text",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "ultimate-media-downloader_ultimate-media-downloader",
+      "name": "Ultimate Media Downloader",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "vlc_vlc",
+      "name": "VLC media player",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "cli-codex",
+      "name": "codex",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "cli-claude",
+      "name": "claude",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "cli-agy",
+      "name": "agy",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    },
+    {
+      "id": "cli-screen",
+      "name": "screen",
+      "status": "ADAPTER_OR_FIXTURE_REQUIRED",
+      "reason": "Not executed automatically: system components, URL handlers, credential managers, proprietary launchers or missing state assertions.",
+      "native_session_verified": false
+    }
+  ],
+  "fixtures": [
+    {
+      "application": "gnome-calculator",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "gnome-text-editor",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "papers",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM."
+    },
+    {
+      "application": "evince",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM."
+    },
+    {
+      "application": "blender",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "vlc",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM."
+    },
+    {
+      "application": "remmina",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "subl",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM."
+    },
+    {
+      "application": "code",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "code-insiders",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM."
+    },
+    {
+      "application": "codium",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM."
+    },
+    {
+      "application": "cursor",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM."
+    },
+    {
+      "application": "antigravity",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM."
+    },
+    {
+      "application": "qoder",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "warp-terminal",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "gnome-clocks",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "gnome-characters",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "gnome-font-viewer",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "gnome-system-monitor",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "gnome-logs",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "strawberry",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "clementine",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM."
+    },
+    {
+      "application": "firefox",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM."
+    },
+    {
+      "application": "chromium",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM."
+    },
+    {
+      "application": "libreoffice",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM."
+    },
+    {
+      "application": "nautilus",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "baobab",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "eog",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "yelp",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "gnome-terminal",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM."
+    },
+    {
+      "application": "zenity",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "qjackctl",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "remote-viewer",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "virt-manager",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "sysprof",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "gnome-power-statistics",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM."
+    },
+    {
+      "application": "nvidia-settings",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "gnome-control-center",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM."
+    },
+    {
+      "application": "idle-python3.13",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "ai.opencode.desktop",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "devin-desktop",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "exef",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM."
+    },
+    {
+      "application": "pycharm-snap",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "pycharm-toolbox",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "idea-community",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "webstorm",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "webstorm-3",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "android-studio",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "jetbrains-gateway",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "zed",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "zed-preview",
+      "status": "DATA_AND_WINDOW_PASS",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "Synthetic file bytes and a visible window (possibly splash/setup) verified; native saved session state is not verified."
+    },
+    {
+      "application": "antigravity-ide",
+      "status": "NO_WINDOW_IN_ISOLATED_FIXTURE",
+      "synthetic_files_restored": true,
+      "native_session_verified": false,
+      "reason": "No visible window within bounded startup; Snap/service/display/runtime prerequisites may differ in a full VM."
+    }
+  ],
+  "evidence": [
+    "artifact://application-matrix-20261008-final",
+    "artifact://novnc-fixture-20261008-v3",
+    "artifact://service-proof-20261008"
+  ]
+}
