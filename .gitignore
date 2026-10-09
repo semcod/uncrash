@@ -1,0 +1,17 @@
+
+# Repository-local worktrees and operational state
+/.worktrees/
+/.subactor/leases/
+/.subactor/sessions/
+/.subactor/recovery/
+/.subactor/receipts/
+/.subactor/cache/
+/.subactor/snapshots/
+/.governance/.observation-failures.log
+
+.cursor/rules
+.githooks
+.github
+.governance
+.idea
+.subactor

@@ -1,9 +1,18 @@
 {
   "schema": "wellman.standard-requirements/v1",
   "profiles": [
-    "baseline"
+    "baseline",
+    "deployment"
   ],
   "requirements": [
+    {
+      "id": "wellmanifest/authority-lifecycle",
+      "minimumLevel": "S5"
+    },
+    {
+      "id": "wellmanifest/deployment",
+      "minimumLevel": "S5"
+    },
     {
       "id": "wellmanifest/docs",
       "minimumLevel": "S3"
@@ -14,15 +23,31 @@
     },
     {
       "id": "wellmanifest/logs",
-      "minimumLevel": "S3"
+      "minimumLevel": "S5"
     },
     {
       "id": "wellmanifest/merge",
-      "minimumLevel": "S4"
+      "minimumLevel": "S5"
     },
     {
       "id": "wellmanifest/new-project",
       "minimumLevel": "S4"
+    },
+    {
+      "id": "wellmanifest/nl-api-llm",
+      "minimumLevel": "S4"
+    },
+    {
+      "id": "wellmanifest/nl-dsl-llm",
+      "minimumLevel": "S4"
+    },
+    {
+      "id": "wellmanifest/poa",
+      "minimumLevel": "S5"
+    },
+    {
+      "id": "wellmanifest/skills",
+      "minimumLevel": "S3"
     },
     {
       "id": "wellmanifest/ticket-lifecycle",
