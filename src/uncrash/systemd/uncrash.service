@@ -1,0 +1,12 @@
+[Unit]
+Description=Uncrash recovery snapshots with optional encryption
+
+[Service]
+Type=simple
+UMask=0077
+ExecStart=%h/.local/bin/uncrash daemon
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
