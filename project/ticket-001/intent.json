@@ -1,0 +1,88 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-001",
+  "summary": "Define Uncrash package metadata and recovery contract",
+  "workstream": "integration",
+  "placement": {
+    "home": "semcod",
+    "runtimeOwner": "semcod",
+    "shape": "runtime_service",
+    "adopt": [
+      "wellmanifest/docs",
+      "wellmanifest/logs",
+      "wellmanifest/worktrees"
+    ]
+  },
+  "classification": {
+    "kind": "SERVICE",
+    "priority": "P1",
+    "origin": "requested"
+  },
+  "allowedPaths": [
+    "project/ticket-001/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "pyproject.toml",
+    "docs/**"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "cf68136c34b5b6cc390e0f5c8a566c9543953a69",
+    "targetBranch": "main",
+    "outcome": "Define Uncrash package metadata, recovery contract and pyproject governance packaging lifecycle",
+    "nonGoals": [
+      "modify unrelated provider runtime files"
+    ],
+    "complexity": "L",
+    "estimatedMinutes": 60,
+    "budgets": {
+      "maxImplementationFiles": 15,
+      "maxAffectedComponents": 2,
+      "maxPublicInterfaceChanges": 1,
+      "maxRuntimeDependencies": 1
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Package metadata in pyproject.toml binds governance gate and documentation standard",
+      "components": [
+        {
+          "name": "packaging",
+          "paths": ["pyproject.toml"]
+        },
+        {
+          "name": "documentation",
+          "paths": ["docs/**"]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [
+        "pyproject.toml metadata and tool.wellmanifest declaration"
+      ],
+      "dataChanges": [
+        "documentation contract alignment"
+      ],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "revert packaging and documentation commits"
+    },
+    "runtimeDependencies": [
+      "cryptography>=41"
+    ],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": ["./project/governance-check.sh"],
+        "evidence": "governance gate passes"
+      }
+    ]
+  }
+}

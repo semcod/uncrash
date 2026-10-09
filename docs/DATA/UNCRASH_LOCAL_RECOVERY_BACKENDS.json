@@ -1,0 +1,289 @@
+{
+  "schema": "uncrash.local-backend-research/v1",
+  "date": "2026-10-08",
+  "source_revision": "99601d769ca03236d8ed1249bda97451fe455d79",
+  "search": {
+    "discovered": 1003,
+    "indexed": 1002,
+    "unchanged": 0,
+    "failed": [
+      {
+        "id": "autogrammar-worktrees/todo2code-ticket090-hermetic-tests",
+        "error": "ValueError: git_metadata_unavailable"
+      }
+    ],
+    "removed": 0,
+    "documents": 133817,
+    "organizations": [],
+    "elapsed_seconds": 43.426
+  },
+  "source_bindings": [
+    {
+      "repository": "semcod/search",
+      "head": "8069745f05cc2cbcc83956c70b972f0a82db20b8",
+      "path": "src/subactor_search/__main__.py",
+      "sha256": "93f7eddab94472caa571f4364ef236a8e0313a967397452d90b68c8d4bd81a78",
+      "file_dirty": false
+    },
+    {
+      "repository": "wronai/clonebox",
+      "head": "534c661f132db12cfdd5a1cd779bdbc41267b7d5",
+      "path": "src/clonebox/snapshots/manager.py",
+      "sha256": "846cccf15e9924f5e34ea8f8edce0aafc89d944f9cd50de03d4beec351ef4b50",
+      "file_dirty": false
+    },
+    {
+      "repository": "wronai/clonebox",
+      "head": "534c661f132db12cfdd5a1cd779bdbc41267b7d5",
+      "path": "src/clonebox/cli/snapshot_commands.py",
+      "sha256": "3fed4165a18ac91fdd17d4076c51a07d539aea0814fcb84a3fc007594d71e12d",
+      "file_dirty": false
+    },
+    {
+      "repository": "clonerd-com/clonerd",
+      "head": "289788624ea6b2868699d70ed83a01bf492b8baf",
+      "path": "src/clonerd/core.py",
+      "sha256": "071aaf3c628c6e2426515ed9c7d6c893bb8604240b5db0439e446313d3af4f41",
+      "file_dirty": false
+    },
+    {
+      "repository": "twinerd/vnclone",
+      "head": "0b96410746c58b73e837dd42906285b781a178cc",
+      "path": "src/vnclone/lifecycle.py",
+      "sha256": "7c7db07d740cba3884ee828443f96a218b8f59ef9c9cff422b4a0987c64ea5db",
+      "file_dirty": false
+    },
+    {
+      "repository": "twinerd/vnclone",
+      "head": "0b96410746c58b73e837dd42906285b781a178cc",
+      "path": "src/vnclone/state.py",
+      "sha256": "3e51080f84836edacf7c62f139f3c4015b24c14b0ed58925c81eaa51982df5fe",
+      "file_dirty": false
+    },
+    {
+      "repository": "twinerd/vnclone",
+      "head": "0b96410746c58b73e837dd42906285b781a178cc",
+      "path": "src/vnclone/orchestrator.py",
+      "sha256": "08417c71bc881aa60588e62bd8b77eac25d37d91d883efdf8da503966273f109",
+      "file_dirty": false
+    }
+  ],
+  "proofs": {
+    "clonerd": {
+      "status": "PASS",
+      "verified_files": 2,
+      "encrypted_snapshot_transferred": true,
+      "restore_without_key_refused": true,
+      "own_fixture_key_transferred_separately": true,
+      "document_restored": true
+    },
+    "vnclone": {
+      "personal_profiles_used": false,
+      "provider_chat_resume_verified": false,
+      "native_adapter": {
+        "status": "BUG_CONFIRMED",
+        "returns_success": true,
+        "tab_count_after_restore": 4,
+        "expected_tabs": 2,
+        "reason": "restore appends tabs to an already-restored profile"
+      },
+      "unreachable_endpoint": {
+        "status": "BUG_CONFIRMED",
+        "returns_success_without_browser": true
+      },
+      "orchestrator": {
+        "status": "PASS_TAB_SET_AND_COUNT",
+        "tab_counts": [
+          2,
+          2
+        ],
+        "tab_order_verified": false,
+        "native_session_ram_verified": false
+      },
+      "manifest_restored_from_encrypted_snapshot": true,
+      "novnc_connected": true
+    },
+    "agy-data": {
+      "status": "PASS_SYNTHETIC_AGY_DATA",
+      "native_conversation_id_reader_verified": true,
+      "sqlite_and_history_restored": true,
+      "oauth_token_excluded": true,
+      "actual_agy_provider_resume_executed": false,
+      "sqlite_live_wal_consistency_tested": false
+    },
+    "clonebox": {
+      "status": "PASS_VM_RAM_PRIMITIVE",
+      "manager_api": "CloneBox SnapshotManager FULL",
+      "guest_crash_simulated": true,
+      "encrypted_uncrash_snapshot": "20261008T184435607750-d480083ec675",
+      "disk_and_libvirt_metadata_restored": true,
+      "memory_only_text_restored": true,
+      "post_snapshot_mutation_absent": true,
+      "novnc_rendered": true,
+      "live_pty_tested": false,
+      "restored_shell_pid_and_pty": null,
+      "installed_gui_apps_or_provider_sessions_tested": false,
+      "guest": "Owned synthetic BIOS boot program",
+      "network_host_mounts_or_credentials": false
+    },
+    "clonebox-linux-pty": {
+      "status": "PASS_LINUX_LIVE_PTY",
+      "manager_api": "CloneBox SnapshotManager FULL",
+      "guest_crash_simulated": true,
+      "encrypted_uncrash_snapshot": "20261008T184445182790-5c232ecbfb84",
+      "disk_and_libvirt_metadata_restored": true,
+      "memory_only_text_restored": true,
+      "post_snapshot_mutation_absent": true,
+      "novnc_rendered": true,
+      "live_pty_tested": true,
+      "restored_shell_pid_and_pty": [
+        "83",
+        "/dev/pts/0"
+      ],
+      "installed_gui_apps_or_provider_sessions_tested": false,
+      "guest": "Owned synthetic Linux/BusyBox initramfs",
+      "network_host_mounts_or_credentials": false
+    }
+  },
+  "chrome_xterm": {
+    "schema": "uncrash.novnc-test-receipt/v1",
+    "token": "uncrash-4b45f361b28443c3974fa91255f1d664",
+    "chrome": {
+      "status": "PASS",
+      "snapshot": "20261008T183048391101-17c6f323e584",
+      "localStorage_restored": true,
+      "original_html_restored": true,
+      "saved_tab_count": 2,
+      "saved_tab_urls_restored": true,
+      "window_seen_on_owned_display": true,
+      "novnc_connected": true,
+      "screenshot": "restored-chrome-novnc.png"
+    },
+    "xterm": {
+      "status": "PASS_DURABLE_FILE_REPLAY",
+      "snapshot": "20261008T183053290956-8d302968b6a4",
+      "saved_document_restored": true,
+      "window_seen_on_owned_display": true,
+      "live_pty_restored": false,
+      "screenshot": "restored-xterm-novnc.png"
+    },
+    "fidelity": "browser saved localStorage/session + terminal durable-file replay; no live RAM/PTY"
+  },
+  "clonebox_cli": {
+    "probe": "nonexistent-owned-fixture-name",
+    "exit_code": 1,
+    "snapshot_created": false,
+    "finding": "Error: type object 'SnapshotType' has no attribute 'DISK'\n",
+    "source_head": "534c661f132db12cfdd5a1cd779bdbc41267b7d5"
+  },
+  "sqlite_online_backup": {
+    "unit_tests": 2,
+    "active_wal_committed_row_restored": true,
+    "uncommitted_row_absent": true,
+    "integrity_check": "ok",
+    "consistency_scope": "per-database only"
+  },
+  "test_results": {
+    "recovery_unit_pass": 15,
+    "optional_systemd_skipped_in_short_run": 1,
+    "local_backends_pass": 5,
+    "novnc_chrome_xterm_pass": 1,
+    "first_chrome_run": "failed readiness race; repaired test and rerun passed",
+    "combined_pass": 21,
+    "combined_skipped": 1
+  },
+  "delivery": {
+    "commit": false,
+    "push": false,
+    "pr_open": false,
+    "merge": false,
+    "installed_service_profiles": 0,
+    "blockers": [
+      "DOCS_ADOPTION",
+      "PUBLICATION_PROFILE_MISSING",
+      "governance seed integration"
+    ]
+  },
+  "linux_kernel_asset": {
+    "url": "https://deb.debian.org/debian/dists/bookworm/main/installer-amd64/current/images/netboot/debian-installer/amd64/linux",
+    "sha256": "d8808aa4ca188560da1e6d749dcb930c87a5fd8b11ebff1f3fa6d728af35203d",
+    "size": 8222656,
+    "purpose": "owned synthetic Linux shell/PTY VM fixture",
+    "authority": "test-asset-only; not publication evidence"
+  },
+  "linux_fixture_setup_failures": "Preserved: console shifted punctuation needed explicit Shift events; repaired fixture, final combined suite passed",
+  "evidence_refs": [
+    "artifact:local-backends-20261008-linux-final",
+    "artifact:novnc-fixture-20261008-linux-final",
+    "artifact:governance-adoption-handoff-20261008"
+  ],
+  "production_native_backup": {
+    "profile_count": 4,
+    "user_authorized": "session files and JetBrains settings",
+    "completed_snapshots": 2,
+    "observed_start_interval_seconds": 299.997696,
+    "first_logical_bytes": 13066382860,
+    "first_encrypted_bytes": 3393818804,
+    "authenticated_samples": 5,
+    "full_production_restore_verified": true,
+    "provider_resume_verified": false,
+    "compression": true,
+    "incremental_deduplication": false,
+    "encrypted_budget_bytes": 8589934592,
+    "receipts": [
+      "artifact://production-native-backup-20261008",
+      "artifact://production-native-cadence-20261008",
+      "artifact://production-native-full-restore-20261008",
+      "artifact://production-native-sqlite-integrity-20261008",
+      "artifact://corrupt-source-preservation-20261008"
+    ],
+    "full_restore_scope": "file bytes and hashes; SQLite integrity tracked separately; no provider/UI resume",
+    "full_restore_snapshot": "20261008T192406311148-d7abbadf3e76",
+    "full_restore_files": 3779,
+    "full_restore_bytes": 13072648410,
+    "temporary_real_data_removed": true,
+    "sqlite_integrity": {
+      "checked": 503,
+      "passed": 502,
+      "failed": 1,
+      "failed_profile": "agy-sessions",
+      "current_source_same_error": true,
+      "independent_system_sqlite_confirmed": true,
+      "original_modified": false,
+      "encrypted_evidence_preserved": true
+    }
+  },
+  "latest_combined_tests": {
+    "passed": 44,
+    "skipped": 1,
+    "unit_native": 38,
+    "local_backends": 5,
+    "novnc": 1
+  },
+  "rust_request": {
+    "default_encryption": false,
+    "default_compression": false,
+    "default_engine": "rust",
+    "configured_storage_budget": 34359738368,
+    "shared_blob_reuse": true,
+    "legacy_encrypted_restore_supported": true,
+    "environment_template": ".env.example",
+    "production_deployment_validation": "automatic-four-profile-capture-and-full-plaintext-restore-passed",
+    "production_snapshot": "20261008T203732972964-99d61413a569",
+    "logical_bytes": 13126729992,
+    "files": 3780,
+    "duration_seconds": 9.156,
+    "reused_files": 3775,
+    "rust_source_sha256": "dfa8b39f3adf61af371d575c13cb9ce76285326931b62620e2ab7a2095a80caa",
+    "initial_copy_took_minutes": true,
+    "encrypted_copies_retained": 2,
+    "full_plaintext_restore_verified": true,
+    "full_plaintext_restore_files": 3780,
+    "full_plaintext_restore_bytes": 13126729992,
+    "temporary_real_data_removed": true,
+    "observed_start_interval_seconds": 299.995729,
+    "later_capture_seconds": 23.198,
+    "sqlite_integrity_rechecked": false,
+    "known_source_corruption_remains": true
+  }
+}
