@@ -1,17 +1,28 @@
 """Exercise the transfer boundary without making SSH calls."""
 import hashlib
-from http.server import ThreadingHTTPServer
 import json
-from pathlib import Path
+import socket
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
+import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from server import Config, RecoveryInterface, Rejected, handler_for
+from server import (
+    MAX_PREVIEW_PAGE,
+    Config,
+    PreviewPage,
+    RecoveryInterface,
+    Rejected,
+    handler_for,
+    preview_available,
+)
 
 
 class TransferTests(unittest.TestCase):
@@ -173,6 +184,96 @@ class HTTPTests(unittest.TestCase):
             self.post('/api/transfer/plan', {'host': 'other@host', 'source': '/etc/passwd'}, self.origin)
         self.assertEqual(error.exception.code, 404)
         self.assertEqual(self.calls, [])
+
+
+class PreviewTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.requests = []
+        requests = self.requests
+        valid = b'<div id="noVNC_container"></div><script type="module" src="app/ui.js"></script>'
+
+        class PreviewHandler(BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def do_GET(self):
+                requests.append(self.path)
+                if self.path == '/slow':
+                    time.sleep(0.4)
+                status = 302 if self.path == '/redirect' else 404 if self.path == '/missing' else 200
+                body = b'<html>Another application</html>' if self.path == '/other' else valid
+                if self.path == '/broken-client':
+                    body = b'<div id="noVNC_container"></div>'
+                self.send_response(status)
+                self.send_header('Content-Type', 'application/json' if self.path == '/json' else 'text/html')
+                if status == 302:
+                    self.send_header('Location', '/vnc.html')
+                length = MAX_PREVIEW_PAGE + 1 if self.path == '/oversized' else len(body)
+                self.send_header('Content-Length', str(length))
+                self.end_headers()
+                if self.path != '/oversized':
+                    try:
+                        self.wfile.write(body)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+
+        self.http = ThreadingHTTPServer(('127.0.0.1', 0), PreviewHandler)
+        self.thread = threading.Thread(target=self.http.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.stop_server)
+        self.base = f'http://127.0.0.1:{self.http.server_port}'
+
+    def stop_server(self):
+        self.http.shutdown()
+        self.http.server_close()
+        self.thread.join(2)
+
+    def test_http_probe_requires_actual_client_page_and_preserves_query(self):
+        self.assertTrue(preview_available(self.base + '/vnc.html?autoconnect=true&resize=scale'))
+        self.assertEqual(self.requests, ['/vnc.html?autoconnect=true&resize=scale'])
+        for path in ['/other', '/json', '/missing', '/broken-client', '/oversized', '/slow']:
+            with self.subTest(path=path):
+                self.assertFalse(preview_available(self.base + path))
+
+    def test_inline_and_external_module_clients(self):
+        for script in ['<script type="module">import UI from "./app/ui.js";</script>',
+                       '<script type="module" src="./app/ui.js"></script>']:
+            with self.subTest(script=script):
+                parser = PreviewPage()
+                parser.feed('<div id="noVNC_container"></div>' + script)
+                self.assertTrue(parser.container and parser.client)
+        parser = PreviewPage()
+        parser.feed('<div id="noVNC_container"></div><script>import UI from "./app/ui.js";</script>')
+        self.assertFalse(parser.client)
+
+    def test_redirect_does_not_follow_to_another_page(self):
+        self.assertFalse(preview_available(self.base + '/redirect'))
+        self.assertEqual(self.requests, ['/redirect'])
+
+    def test_stopped_listener_and_invalid_loopback_endpoint(self):
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            port = listener.getsockname()[1]
+        self.assertFalse(preview_available(f'http://127.0.0.1:{port}/vnc.html'))
+        with self.assertRaises(Rejected):
+            preview_available('http://example.test:8080/vnc.html')
+
+    def test_inventory_checks_each_url_without_erasing_session_identity(self):
+        inventory = self.root / 'sessions.json'
+        rows = [{'conversation_id': str(uuid.uuid4()), 'cwd': '/projects/' + name,
+                 'novnc_url': self.base + path, 'mode': 'plan', 'fidelity': 'persisted'}
+                for name, path in [('ready', '/vnc.html'), ('wrong-service', '/other'),
+                                   ('stopped', '/missing')]]
+        inventory.write_text(json.dumps(rows))
+        inventory.chmod(0o600)
+        interface = RecoveryInterface(Config(self.root / 'state', sessions=inventory))
+        result = interface.sessions()['sessions']
+        self.assertEqual([r['status'] for r in result], ['active', 'stopped', 'stopped'])
+        self.assertEqual([r['id'] for r in result], [r['conversation_id'] for r in rows])
+        self.assertEqual([r['url'] for r in result], [r['novnc_url'] for r in rows])
 
 
 if __name__ == '__main__':

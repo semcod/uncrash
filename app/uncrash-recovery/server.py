@@ -2,29 +2,32 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import hashlib
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
-from pathlib import Path
+import re
 import secrets
 import shutil
 import signal
-import socket
 import stat
 import subprocess
 import tempfile
 import threading
 import time
-from urllib.parse import urlsplit
 import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from html.parser import HTMLParser
+from http.client import HTTPConnection, HTTPException
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlsplit
 
 from logger import record
 
 ROOT = Path(__file__).resolve().parent
 MAX_BUNDLE = 128 * 1024 * 1024
+MAX_PREVIEW_PAGE = 256 * 1024
 OPERATIONS = [
     {'method': 'GET', 'path': '/health', 'kind': 'query'},
     {'method': 'GET', 'path': '/api/registry', 'kind': 'query'},
@@ -45,6 +48,63 @@ def loopback_url(value):
             u.password or not u.port or u.fragment):
         raise Rejected('Only a configured loopback HTTP endpoint is supported')
     return value
+
+
+class PreviewPage(HTMLParser):
+    """Recognize the noVNC client page, without executing its scripts."""
+
+    def __init__(self):
+        super().__init__()
+        self.container = False
+        self.client = False
+        self.module = False
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if attrs.get('id') in {'noVNC_container', 'noVNC_screen'}:
+            self.container = True
+        if tag == 'script' and attrs.get('type') == 'module':
+            self.module = True
+            self.client |= urlsplit(attrs.get('src', '')).path in {
+                'app/ui.js', './app/ui.js', '/app/ui.js',
+            }
+
+    def handle_endtag(self, tag):
+        if tag == 'script':
+            self.module = False
+
+    def handle_data(self, data):
+        if self.module and re.search(
+                r'\bimport\s+\w+\s+from\s+[\'"](?:\./|/)?app/ui\.js[\'"]', data):
+            self.client = True
+
+
+def preview_available(value):
+    """Check HTTP preview readiness; this does not attest an RFB connection."""
+    url = urlsplit(loopback_url(value))
+    connection = HTTPConnection(url.hostname, url.port, timeout=0.2)
+    try:
+        path = url.path or '/'
+        if url.query:
+            path += '?' + url.query
+        # A direct connection avoids proxy settings; redirects are never followed.
+        connection.request('GET', path, headers={'Accept': 'text/html'})
+        response = connection.getresponse()
+        if response.status != 200 or response.headers.get_content_type() != 'text/html':
+            return False
+        length = response.getheader('Content-Length')
+        if length is not None and not 0 < int(length) <= MAX_PREVIEW_PAGE:
+            return False
+        page = response.read(MAX_PREVIEW_PAGE + 1)
+        if len(page) > MAX_PREVIEW_PAGE:
+            return False
+        parser = PreviewPage()
+        parser.feed(page.decode('utf-8'))
+        return parser.container and parser.client
+    except (OSError, HTTPException, UnicodeError, ValueError):
+        return False
+    finally:
+        connection.close()
 
 
 def confined_path(value):
@@ -141,12 +201,7 @@ class RecoveryInterface:
         for row in rows:
             sid = str(uuid.UUID(row['conversation_id']))
             url = loopback_url(row['novnc_url'])
-            u = urlsplit(url)
-            try:
-                with socket.create_connection((u.hostname, u.port), timeout=0.2):
-                    alive = True
-            except OSError:
-                alive = False
+            alive = preview_available(url)
             sessions.append({'id': sid, 'name': Path(row.get('cwd', '')).name or 'Sesja',
                              'url': url, 'status': 'active' if alive else 'stopped',
                              'fidelity': row.get('fidelity', 'persisted conversation'),
@@ -162,7 +217,7 @@ class RecoveryInterface:
         token = secrets.token_urlsafe(32)
         p = {'token': token, 'name': Path(self.config.bundle).name, 'sha256': sha,
              'bytes': size, 'host': self.config.host,
-             'expiresAt': (datetime.now(timezone.utc) + timedelta(seconds=120)).isoformat(),
+             'expiresAt': (datetime.now(UTC) + timedelta(seconds=120)).isoformat(),
              'requiresConfirmation': True, 'dataTransferred': False}
         with self.lock:
             self.plans = {k: v for k, v in self.plans.items() if v['deadline'] > now}
