@@ -39,6 +39,11 @@ def test_mcp_server_tools():
         assert "uncrash_close_gui_app" in tool_names
         assert "uncrash_get_jetbrains_state" in tool_names
         assert "uncrash_get_desktop_inventory" in tool_names
+        assert "uncrash_list_workspaces" in tool_names
+        assert "uncrash_create_workspace" in tool_names
+        assert "uncrash_close_workspace" in tool_names
+        assert "uncrash_get_gpu_status" in tool_names
+        assert "uncrash_get_installed_applications" in tool_names
 
         call_res = await server.call_tool("uncrash_list_gui_apps", {})
         assert len(call_res.content) > 0
@@ -50,4 +55,233 @@ def test_mcp_server_tools():
         parsed_inv = json.loads(inv_res.content[0].text)
         assert "launchers" in parsed_inv
 
+        ws_res = await server.call_tool("uncrash_list_workspaces", {})
+        assert len(ws_res.content) > 0
+        parsed_ws = json.loads(ws_res.content[0].text)
+        assert "workspaces" in parsed_ws
+
+        gpu_res = await server.call_tool("uncrash_get_gpu_status", {})
+        assert len(gpu_res.content) > 0
+        parsed_gpu = json.loads(gpu_res.content[0].text)
+        assert "present" in parsed_gpu
+
+        apps_res = await server.call_tool("uncrash_get_installed_applications", {})
+        assert len(apps_res.content) > 0
+        parsed_apps = json.loads(apps_res.content[0].text)
+        assert "categories" in parsed_apps
+        assert "total_installed" in parsed_apps
+
     asyncio.run(run_mcp_checks())
+
+
+def test_web_dashboard_and_snapshot_endpoints(tmp_path):
+    from fastapi.testclient import TestClient
+    from uncrash.store import Store
+
+    store = Store(tmp_path / 'store', 'test-origin')
+    source = tmp_path / 'source'
+    source.mkdir()
+    (source / 'test.txt').write_text('content')
+    config = {'origin': 'test-origin', 'profiles': [{'id': 'app', 'state_dir': str(source), 'argv': []}]}
+    sid = store.capture(config)['snapshot']
+
+    app = create_fastapi_app(store=store, config=config)
+    client = TestClient(app)
+
+    res = client.get("/")
+    assert res.status_code == 200
+    assert "text/html" in res.headers["content-type"]
+    assert "uncrash" in res.text.lower()
+
+    snaps_res = client.get("/api/v1/snapshots")
+    assert snaps_res.status_code == 200
+    data = snaps_res.json()
+    assert data["schema"] == "uncrash.snapshots-list/v1"
+    assert data["count"] >= 1
+    assert any(s["id"] == sid for s in data["snapshots"])
+
+    snap_res = client.get(f"/api/v1/snapshots/{sid}")
+    assert snap_res.status_code == 200
+    snap_data = snap_res.json()
+    assert snap_data["snapshot"] == sid
+    assert "terminal_tabs" in snap_data
+
+    launch_res = client.post(f"/api/v1/snapshots/{sid}/launch-tabs?dry_run=true")
+    assert launch_res.status_code == 200
+
+
+def test_workspace_endpoints(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from uncrash.store import Store
+    from uncrash.preview import VirtualPreviewDesktop
+
+    store = Store(tmp_path / 'store', 'test-origin')
+    source = tmp_path / 'source'
+    source.mkdir()
+    (source / 'test.txt').write_text('content')
+    config = {'origin': 'test-origin', 'profiles': [{'id': 'app', 'state_dir': str(source), 'argv': []}]}
+    sid = store.capture(config)['snapshot']
+
+    app = create_fastapi_app(store=store, config=config)
+    client = TestClient(app)
+
+    class DummyProc:
+        def poll(self): return None
+        def terminate(self): pass
+        def kill(self): pass
+        def wait(self, timeout=None): pass
+
+    def dummy_start(self, *args, **kwargs):
+        self.display = 99
+        self.rfb_port = 5999
+        self.ws_port = 6099
+        self.processes = [DummyProc()]
+        return {
+            'display': ':99',
+            'rfb_port': 5999,
+            'ws_port': 6099,
+            'novnc_url': 'http://127.0.0.1:6099/vnc.html?autoconnect=true&resize=scale',
+            'status': 'running'
+        }
+
+    monkeypatch.setattr(VirtualPreviewDesktop, 'start', dummy_start)
+
+    # 1. List workspaces (empty or twinerd)
+    res = client.get("/api/v1/workspaces")
+    assert res.status_code == 200
+    assert "workspaces" in res.json()
+
+    # 2. Create workspace
+    create_res = client.post(f"/api/v1/snapshots/{sid}/workspace")
+    assert create_res.status_code == 200
+    ws_data = create_res.json()
+    assert ws_data["workspace_id"] == f"ws-{sid}"
+    assert ws_data["display"] == ":99"
+    assert ws_data["status"] == "running"
+
+    # 3. Get workspace details
+    get_res = client.get(f"/api/v1/workspaces/ws-{sid}")
+    assert get_res.status_code == 200
+    assert get_res.json()["workspace_id"] == f"ws-{sid}"
+
+    # 4. Close workspace
+    close_res = client.post(f"/api/v1/workspaces/ws-{sid}/close")
+    assert close_res.status_code == 200
+    assert close_res.json()["closed"] is True
+
+    # 5. Get closed workspace returns 404
+    get_closed = client.get(f"/api/v1/workspaces/ws-{sid}")
+    assert get_closed.status_code == 404
+
+    # 6. Create Kasm workspace
+    kasm_res = client.post(f"/api/v1/snapshots/{sid}/workspace?engine=kasm")
+    assert kasm_res.status_code == 200
+    kasm_data = kasm_res.json()
+    assert kasm_data["workspace_id"] == f"kasm-{sid}"
+    assert kasm_data["engine"] == "kasm"
+    assert kasm_data["status"] == "running"
+    assert "workspace_dir" in kasm_data
+
+    # Close Kasm workspace
+    close_kasm = client.post(f"/api/v1/workspaces/kasm-{sid}/close")
+    assert close_kasm.status_code == 200
+    assert close_kasm.json()["closed"] is True
+
+    # 7. Virtualization engines catalog endpoint
+    eng_res = client.get("/api/v1/virtualization/engines")
+    assert eng_res.status_code == 200
+    eng_data = eng_res.json()
+    assert eng_data["schema"] == "uncrash.virtualization-engines/v1"
+    assert eng_data["count"] >= 5
+    engine_ids = [e["id"] for e in eng_data["engines"]]
+    assert "native" in engine_ids
+    assert "kasm" in engine_ids
+    assert "clonebox" in engine_ids
+    assert "clonebox-container" in engine_ids
+    assert "pelorus" in engine_ids
+
+    # 8. Create CloneBox VM workspace
+    cb_res = client.post(f"/api/v1/snapshots/{sid}/workspace?engine=clonebox")
+    assert cb_res.status_code == 200
+    cb_data = cb_res.json()
+    assert cb_data["workspace_id"] == f"cb-{sid}"
+    assert cb_data["engine"] == "clonebox"
+    assert cb_data["status"] == "running"
+    assert "workspace_dir" in cb_data
+    assert cb_data["staged_files_count"] >= 3
+
+    # Close CloneBox workspace
+    close_cb = client.post(f"/api/v1/workspaces/cb-{sid}/close")
+    assert close_cb.status_code == 200
+    assert close_cb.json()["closed"] is True
+
+    # 9. Create CloneBox Container workspace
+    cbc_res = client.post(f"/api/v1/snapshots/{sid}/workspace?engine=clonebox-container")
+    assert cbc_res.status_code == 200
+    cbc_data = cbc_res.json()
+    assert cbc_data["workspace_id"] == f"cbc-{sid}"
+    assert cbc_data["engine"] == "clonebox-container"
+    assert cbc_data["status"] == "running"
+    assert "workspace_dir" in cbc_data
+
+    # Close CloneBox Container workspace
+    close_cbc = client.post(f"/api/v1/workspaces/cbc-{sid}/close")
+    assert close_cbc.status_code == 200
+    assert close_cbc.json()["closed"] is True
+
+    # 10. Create Pelorus Twin workspace
+    pel_res = client.post(f"/api/v1/snapshots/{sid}/workspace?engine=pelorus")
+    assert pel_res.status_code == 200
+    pel_data = pel_res.json()
+    assert pel_data["workspace_id"] == f"pelorus-{sid}"
+    assert pel_data["engine"] == "pelorus"
+    assert pel_data["status"] == "running"
+    assert "workspace_dir" in pel_data
+
+    # Close Pelorus workspace
+    close_pel = client.post(f"/api/v1/workspaces/pelorus-{sid}/close")
+    assert close_pel.status_code == 200
+    assert close_pel.json()["closed"] is True
+
+
+def test_gpu_and_applications_endpoints():
+    from fastapi.testclient import TestClient
+    app = create_fastapi_app()
+    client = TestClient(app)
+
+    # 1. GPU status endpoint
+    gpu_res = client.get("/api/v1/system/gpu")
+    assert gpu_res.status_code == 200
+    gpu_data = gpu_res.json()
+    assert "present" in gpu_data
+    if gpu_data["present"]:
+        assert "NVIDIA" in gpu_data["name"]
+        assert "driver_version" in gpu_data
+        assert "cuda_version" in gpu_data
+        assert "memory_total_mb" in gpu_data
+        assert gpu_data["memory_total_mb"] > 0
+        assert "tools" in gpu_data
+        assert gpu_data["tools"].get("nvidia-smi") is True
+
+    # 2. Installed applications matrix endpoint
+    apps_res = client.get("/api/v1/system/applications")
+    assert apps_res.status_code == 200
+    apps_data = apps_res.json()
+    assert apps_data["schema"] == "uncrash.application-matrix/v1"
+    assert apps_data["total_installed"] >= 1
+    categories = apps_data["categories"]
+    assert "gpu_hardware" in categories
+    assert "ai_agents" in categories
+    assert "jetbrains" in categories
+    assert "code_terminals" in categories
+    assert "browsers" in categories
+    assert "virtualization" in categories
+
+    # Check that at least some apps have active recovery profiles
+    all_apps = [a for cat in categories.values() for a in cat.get('apps', [])]
+    has_profile_apps = [a for a in all_apps if a.get("has_recovery_profile")]
+    assert len(has_profile_apps) >= 1
+
+
+
+

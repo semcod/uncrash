@@ -20,6 +20,23 @@ def discover(home=None):
                 '*/filetypes/*.xml', '*/templates/*.xml', '*/codestyles/*.xml', '*/dictionaries/*.xml'], []),
         ('jetbrains-recovery', '.cache/JetBrains',
             ['*/LocalHistory/*', '*/workspace/*.xml'], []),
+        ('nvidia-compute-cache', '.nv', ['**/*'], []),
+        ('cursor-settings', '.config/cursor', ['**/*'], []),
+        ('cursor-agent', '.local/share/cursor-agent', ['**/*'], []),
+        ('vscode-settings', '.config/Code', ['User/settings.json', 'User/keybindings.json', 'User/snippets/*'], []),
+        ('vscode-insiders-settings', '.config/Code - Insiders', ['User/settings.json', 'User/keybindings.json', 'User/snippets/*'], []),
+        ('antigravity2-settings', '.config/antigravity2', ['**/*'], []),
+        ('antigravity-ide-state', '.local/share/antigravity-ide', ['**/*'], []),
+        ('warp-terminal-settings', '.config/warp-terminal', ['**/*'], []),
+        ('zed-settings', '.config/zed', ['settings.json', 'keymap.json'], []),
+        ('devin-desktop', '.config/devin', ['**/*'], []),
+        ('opencode-desktop', '.config/opencode', ['**/*'], []),
+        ('qoder-settings', '.config/qoder', ['**/*'], []),
+        ('blender-settings', '.config/blender', ['*/*/*.blend', '*/*/*.xml', '*/*/*.py'], []),
+        ('google-chrome-profiles', '.config/google-chrome', ['Default/Preferences', 'Default/Bookmarks'], []),
+        ('chromium-profiles', '.config/chromium', ['Default/Preferences', 'Default/Bookmarks'], []),
+        ('remmina-connections', '.config/remmina', ['**/*.remmina', 'remmina.pref'], []),
+        ('sublime-text-settings', '.config/sublime-text', ['Packages/User/*'], []),
     ]
     found = []
     for identity, relative, includes, databases in definitions:

@@ -98,6 +98,14 @@ def main(argv=None):
     restore.add_argument('--destination', type=Path, required=True)
     restore.add_argument('--replace', action='store_true')
     restore.add_argument('--display')
+    preview_parser = sub.add_parser('preview', help='Preview windows and terminal tabs from a snapshot before restore')
+    preview_parser.add_argument('snapshot', nargs='?', default='latest', help='Snapshot ID or "latest"')
+    preview_parser.add_argument('--novnc', action='store_true', help='Start an isolated virtual desktop preview with noVNC')
+    preview_parser.add_argument('--port', type=int, help='Custom WebSocket port for noVNC')
+    preview_parser.add_argument('--screenshot', type=Path, help='Capture and save a screenshot PNG of the preview display')
+    preview_parser.add_argument('--launch-tabs', action='store_true', help='Launch recorded terminal tabs in system terminal (gnome-terminal)')
+    preview_parser.add_argument('--dry-run', action='store_true', help='Report planned tab launch without executing')
+    preview_parser.add_argument('--json', action='store_true', help='Output in JSON format')
     startup = sub.add_parser('startup-restore')
     startup.add_argument('--display')
     sub.add_parser('install-user')
@@ -215,25 +223,6 @@ def main(argv=None):
             print(json.dumps(import_bundle(args.source, args.destination), ensure_ascii=False, indent=2)); return 0
         if args.command == 'bundle-transfer':
             print(json.dumps(transfer_bundle(args.source, args.host, args.name, args.timeout), ensure_ascii=False, indent=2)); return 0
-        if args.command == 'serve':
-            import uvicorn
-            from .api import create_fastapi_app
-            app = create_fastapi_app()
-            uvicorn.run(app, host=args.host, port=args.port)
-            return 0
-        if args.command == 'mcp':
-            from .api import create_mcp_server
-            server = create_mcp_server()
-            if args.transport == 'stdio':
-                import asyncio
-                asyncio.run(server.run_stdio_async())
-            elif args.transport == 'sse':
-                import uvicorn
-                uvicorn.run(server.sse_app(), host=args.host, port=args.port)
-            elif args.transport == 'streamable-http':
-                import uvicorn
-                uvicorn.run(server.streamable_http_app(), host=args.host, port=args.port)
-            return 0
 
         user_config_env = Path.home()/'.config/uncrash/.env'
         cwd_env = Path.cwd()/'.env'
@@ -271,6 +260,26 @@ def main(argv=None):
             if args.output: save_report(result, args.output)
             print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
         store = Store(args.state, config.get('origin'), encrypt=config.get('encrypt', False))
+        if args.command == 'serve':
+            import uvicorn
+            from .api import create_fastapi_app
+            app = create_fastapi_app(store=store, config=config)
+            print(f"Uncrash Web Client running on http://{args.host}:{args.port}/")
+            uvicorn.run(app, host=args.host, port=args.port)
+            return 0
+        if args.command == 'mcp':
+            from .api import create_mcp_server
+            server = create_mcp_server(store=store, config=config)
+            if args.transport == 'stdio':
+                import asyncio
+                asyncio.run(server.run_stdio_async())
+            elif args.transport == 'sse':
+                import uvicorn
+                uvicorn.run(server.sse_app(), host=args.host, port=args.port)
+            elif args.transport == 'streamable-http':
+                import uvicorn
+                uvicorn.run(server.streamable_http_app(), host=args.host, port=args.port)
+            return 0
         if args.command == 'build-native':
             result = {'binary': str(build_native(args.state)), 'engine': 'rust'}
         elif args.command == 'snapshot':
@@ -279,6 +288,42 @@ def main(argv=None):
             result = export_bundle(store, args.snapshot, args.destination)
         elif args.command == 'list':
             result = store.list()
+        elif args.command == 'preview':
+            from .preview import preview_snapshot
+            result = preview_snapshot(store, args.snapshot, config,
+                                      novnc=args.novnc,
+                                      port=args.port,
+                                      screenshot=args.screenshot,
+                                      launch_tabs=args.launch_tabs,
+                                      dry_run=args.dry_run)
+            if not args.json:
+                print(f"=== Uncrash Snapshot Preview: {result['snapshot']} ===")
+                print(f"Captured: {result.get('created_at', 'unknown')}")
+                print(f"Profiles: {', '.join(result.get('profiles', []))}")
+                tabs = result.get('terminal_tabs', [])
+                print(f"\nRecorded Terminal Tabs ({len(tabs)}):")
+                if not tabs:
+                    print("  (no terminal tabs recorded)")
+                for idx, t in enumerate(tabs, 1):
+                    tty_str = f" [tty: {t['terminal']}]" if t.get('terminal') else ""
+                    print(f"  [{idx}] {t['title']:<32} | cwd: {t['cwd']}{tty_str}")
+                    print(f"      Resume command: {t['resume_command']}")
+                projs = result.get('gui_projects', [])
+                if projs:
+                    print(f"\nJetBrains / GUI Projects ({len(projs)}):")
+                    for p in projs:
+                        status = " [active]" if p.get('is_last') else ""
+                        print(f"  • [{p['state']}] {p['path']}{status}")
+                if result.get('novnc'):
+                    print(f"\nnoVNC Preview Display: {result['novnc']['display']}")
+                    print(f"noVNC Web URL:         {result['novnc']['novnc_url']}")
+                if result.get('screenshot'):
+                    print(f"Screenshot Saved:      {result['screenshot']}")
+                if result.get('launch_script'):
+                    print(f"\nLaunch in system terminal:\n  {result['launch_script']}")
+                if result.get('tabs_launch_result'):
+                    print(f"\nTerminal Launch Status: {result['tabs_launch_result'].get('status')}")
+                return 0
         elif args.command == 'restore':
             result = store.restore(args.snapshot, config, args.destination, replace=args.replace)
             if args.display:
