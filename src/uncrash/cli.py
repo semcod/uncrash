@@ -223,25 +223,6 @@ def main(argv=None):
             print(json.dumps(import_bundle(args.source, args.destination), ensure_ascii=False, indent=2)); return 0
         if args.command == 'bundle-transfer':
             print(json.dumps(transfer_bundle(args.source, args.host, args.name, args.timeout), ensure_ascii=False, indent=2)); return 0
-        if args.command == 'serve':
-            import uvicorn
-            from .api import create_fastapi_app
-            app = create_fastapi_app()
-            uvicorn.run(app, host=args.host, port=args.port)
-            return 0
-        if args.command == 'mcp':
-            from .api import create_mcp_server
-            server = create_mcp_server()
-            if args.transport == 'stdio':
-                import asyncio
-                asyncio.run(server.run_stdio_async())
-            elif args.transport == 'sse':
-                import uvicorn
-                uvicorn.run(server.sse_app(), host=args.host, port=args.port)
-            elif args.transport == 'streamable-http':
-                import uvicorn
-                uvicorn.run(server.streamable_http_app(), host=args.host, port=args.port)
-            return 0
 
         user_config_env = Path.home()/'.config/uncrash/.env'
         cwd_env = Path.cwd()/'.env'
@@ -279,6 +260,26 @@ def main(argv=None):
             if args.output: save_report(result, args.output)
             print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
         store = Store(args.state, config.get('origin'), encrypt=config.get('encrypt', False))
+        if args.command == 'serve':
+            import uvicorn
+            from .api import create_fastapi_app
+            app = create_fastapi_app(store=store, config=config)
+            print(f"Uncrash Web Client running on http://{args.host}:{args.port}/")
+            uvicorn.run(app, host=args.host, port=args.port)
+            return 0
+        if args.command == 'mcp':
+            from .api import create_mcp_server
+            server = create_mcp_server(store=store, config=config)
+            if args.transport == 'stdio':
+                import asyncio
+                asyncio.run(server.run_stdio_async())
+            elif args.transport == 'sse':
+                import uvicorn
+                uvicorn.run(server.sse_app(), host=args.host, port=args.port)
+            elif args.transport == 'streamable-http':
+                import uvicorn
+                uvicorn.run(server.streamable_http_app(), host=args.host, port=args.port)
+            return 0
         if args.command == 'build-native':
             result = {'binary': str(build_native(args.state)), 'engine': 'rust'}
         elif args.command == 'snapshot':

@@ -51,3 +51,40 @@ def test_mcp_server_tools():
         assert "launchers" in parsed_inv
 
     asyncio.run(run_mcp_checks())
+
+
+def test_web_dashboard_and_snapshot_endpoints(tmp_path):
+    from fastapi.testclient import TestClient
+    from uncrash.store import Store
+
+    store = Store(tmp_path / 'store', 'test-origin')
+    source = tmp_path / 'source'
+    source.mkdir()
+    (source / 'test.txt').write_text('content')
+    config = {'origin': 'test-origin', 'profiles': [{'id': 'app', 'state_dir': str(source), 'argv': []}]}
+    sid = store.capture(config)['snapshot']
+
+    app = create_fastapi_app(store=store, config=config)
+    client = TestClient(app)
+
+    res = client.get("/")
+    assert res.status_code == 200
+    assert "text/html" in res.headers["content-type"]
+    assert "uncrash" in res.text.lower()
+
+    snaps_res = client.get("/api/v1/snapshots")
+    assert snaps_res.status_code == 200
+    data = snaps_res.json()
+    assert data["schema"] == "uncrash.snapshots-list/v1"
+    assert data["count"] >= 1
+    assert any(s["id"] == sid for s in data["snapshots"])
+
+    snap_res = client.get(f"/api/v1/snapshots/{sid}")
+    assert snap_res.status_code == 200
+    snap_data = snap_res.json()
+    assert snap_data["snapshot"] == sid
+    assert "terminal_tabs" in snap_data
+
+    launch_res = client.post(f"/api/v1/snapshots/{sid}/launch-tabs?dry_run=true")
+    assert launch_res.status_code == 200
+

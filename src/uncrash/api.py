@@ -5,11 +5,12 @@ Dispatches operations across Shell CLI, REST HTTP (FastAPI) and MCP (Model Conte
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from .recovery import detected_gui_apps, close_gui_app, jetbrains_state
 from .inventory import desktop_inventory
+from .web_ui import DASHBOARD_HTML
 
 
 # Universal API Registry conforming to wellmanifest/nl-api-llm
@@ -49,26 +50,79 @@ OPERATIONS_REGISTRY = [
         "protocols": ["cli", "rest", "mcp"],
         "schema": "uncrash.desktop-inventory/v1",
         "parameters": {}
+    },
+    {
+        "id": "uncrash.snapshots.list",
+        "name": "list_snapshots",
+        "description": "List all local crash recovery snapshots with summary metrics, timestamp and tab counts.",
+        "protocols": ["cli", "rest", "mcp"],
+        "schema": "uncrash.snapshots-list/v1",
+        "parameters": {}
+    },
+    {
+        "id": "uncrash.snapshots.preview",
+        "name": "preview_snapshot",
+        "description": "Inspect recorded terminal tabs, GUI applications and launch commands for a specific snapshot.",
+        "protocols": ["cli", "rest", "mcp"],
+        "schema": "uncrash.snapshot-preview/v1",
+        "parameters": {
+            "snapshot_id": {"type": "string", "description": "Snapshot ID or 'latest'", "default": "latest"}
+        }
+    },
+    {
+        "id": "uncrash.snapshots.launch_tabs",
+        "name": "launch_terminal_tabs",
+        "description": "Launch recorded terminal tabs from a snapshot in the system terminal (gnome-terminal).",
+        "protocols": ["cli", "rest", "mcp"],
+        "schema": "uncrash.tabs-launch/v1",
+        "parameters": {
+            "snapshot_id": {"type": "string", "description": "Snapshot ID or 'latest'", "default": "latest"},
+            "dry_run": {"type": "boolean", "description": "Report planned command without launching", "default": False}
+        }
     }
 ]
 
 
-def create_fastapi_app():
-    """Create FastAPI REST application for uncrash."""
+def _resolve_default_store(store=None, config=None):
+    if store is not None:
+        return store, config or {'profiles': []}
+    state_dir = Path.home() / '.local/state/uncrash'
+    config_file = Path.home() / '.config/uncrash/config.json'
+    resolved_config = config or {}
+    if config_file.exists():
+        try:
+            resolved_config = {**json.loads(config_file.read_text()), **resolved_config}
+        except Exception:
+            pass
+    from .store import Store
+    resolved_store = Store(state_dir, resolved_config.get('origin'), encrypt=resolved_config.get('encrypt', False))
+    return resolved_store, resolved_config
+
+
+def create_fastapi_app(store=None, config=None):
+    """Create FastAPI REST application with integrated Web Client dashboard."""
     from fastapi import FastAPI, HTTPException
+    from fastapi.responses import HTMLResponse, FileResponse
     from pydantic import BaseModel
 
     app = FastAPI(
-        title="Uncrash Multi-Protocol API",
+        title="Uncrash Multi-Protocol API & Dashboard",
         version="0.1.2",
-        description="Unified REST and MCP API conforming to wellmanifest/nl-api-llm"
+        description="Unified REST and MCP API with Web Dashboard conforming to wellmanifest/nl-api-llm"
     )
+
+    resolved_store, resolved_config = _resolve_default_store(store, config)
 
     class CloseAppRequest(BaseModel):
         pid: Optional[int] = None
         name: Optional[str] = None
         force: bool = False
         expected_start: Optional[str] = None
+
+    @app.get("/", response_class=HTMLResponse)
+    @app.get("/ui", response_class=HTMLResponse)
+    def web_dashboard():
+        return HTMLResponse(content=DASHBOARD_HTML)
 
     @app.get("/api/v1/health")
     def health():
@@ -103,17 +157,89 @@ def create_fastapi_app():
     def get_inventory():
         return {"schema": "uncrash.desktop-inventory/v1", "launchers": desktop_inventory()}
 
+    @app.get("/api/v1/snapshots")
+    def get_snapshots():
+        from .preview import extract_preview_metadata
+        snapshot_ids = resolved_store.list()
+        items = []
+        for sid in reversed(snapshot_ids):
+            try:
+                _, _, _, manifest = resolved_store.load(sid)
+                meta = extract_preview_metadata(manifest, sid)
+                items.append({
+                    "id": sid,
+                    "created_at": meta.get("created_at"),
+                    "profiles": meta.get("profiles", []),
+                    "terminal_tabs_count": meta.get("terminal_tabs_count", 0),
+                    "gui_projects_count": meta.get("gui_projects_count", 0)
+                })
+            except Exception:
+                items.append({"id": sid, "error": "unreadable"})
+        return {"schema": "uncrash.snapshots-list/v1", "count": len(items), "snapshots": items}
+
+    @app.get("/api/v1/snapshots/{snapshot_id}")
+    def get_snapshot(snapshot_id: str):
+        from .preview import extract_preview_metadata
+        try:
+            _, _, _, manifest = resolved_store.load(snapshot_id)
+            return extract_preview_metadata(manifest, snapshot_id)
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+    @app.post("/api/v1/snapshots/{snapshot_id}/novnc")
+    def post_snapshot_novnc(snapshot_id: str, port: Optional[int] = None):
+        from .preview import preview_snapshot
+        try:
+            res = preview_snapshot(resolved_store, snapshot_id, resolved_config, novnc=True, port=port)
+            if res.get("novnc"):
+                return res["novnc"]
+            raise HTTPException(status_code=500, detail=res.get("novnc_error", "Failed to launch noVNC"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/v1/snapshots/{snapshot_id}/screenshot")
+    def post_snapshot_screenshot(snapshot_id: str):
+        from .preview import preview_snapshot, _temp_dir
+        shot_path = _temp_dir() / f"screenshot-{snapshot_id}.png"
+        try:
+            res = preview_snapshot(resolved_store, snapshot_id, resolved_config, screenshot=shot_path)
+            if shot_path.exists():
+                return {"status": "ok", "screenshot_url": f"/api/v1/snapshots/{snapshot_id}/screenshot.png"}
+            raise HTTPException(status_code=500, detail=res.get("novnc_error", "Failed to capture screenshot"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/v1/snapshots/{snapshot_id}/screenshot.png")
+    def get_snapshot_screenshot_file(snapshot_id: str):
+        from .preview import _temp_dir
+        shot_path = _temp_dir() / f"screenshot-{snapshot_id}.png"
+        if not shot_path.exists():
+            raise HTTPException(status_code=404, detail="Screenshot not found; generate it first via POST")
+        return FileResponse(shot_path, media_type="image/png")
+
+    @app.post("/api/v1/snapshots/{snapshot_id}/launch-tabs")
+    def post_launch_tabs(snapshot_id: str, dry_run: bool = False):
+        from .preview import extract_preview_metadata, launch_terminal_tabs
+        try:
+            _, _, _, manifest = resolved_store.load(snapshot_id)
+            meta = extract_preview_metadata(manifest, snapshot_id)
+            return launch_terminal_tabs(meta["terminal_tabs"], dry_run=dry_run)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
     return app
 
 
-def create_mcp_server():
+def create_mcp_server(store=None, config=None):
     """Create Model Context Protocol (MCP) server for uncrash."""
+    resolved_store, resolved_config = _resolve_default_store(store, config)
+
     try:
         from mcp.server.mcpserver import MCPServer
         mcp = MCPServer(
             name="uncrash",
             version="0.1.2",
-            description="Unified local process recovery and window management tools conforming to wellmanifest/skills"
+            description="Unified local process recovery, snapshot browser and window management tools"
         )
     except (ImportError, ModuleNotFoundError):
         from mcp.server.fastmcp import FastMCP
@@ -141,8 +267,8 @@ def create_mcp_server():
                 return self._server.streamable_http_app()
         mcp = FastMCPCompat(
             name="uncrash",
-            version="0.1.1",
-            description="Unified local process recovery and window management tools conforming to wellmanifest/skills"
+            version="0.1.2",
+            description="Unified local process recovery, snapshot browser and window management tools"
         )
 
     @mcp.tool(
@@ -177,5 +303,48 @@ def create_mcp_server():
         inventory = desktop_inventory()
         return json.dumps({"schema": "uncrash.desktop-inventory/v1", "launchers": inventory}, ensure_ascii=False, indent=2)
 
-    return mcp
+    @mcp.tool(
+        name="uncrash_list_snapshots",
+        description="List all available recovery snapshots with timestamps, profile and terminal tab counts."
+    )
+    def mcp_list_snapshots() -> str:
+        from .preview import extract_preview_metadata
+        snapshot_ids = resolved_store.list()
+        items = []
+        for sid in reversed(snapshot_ids):
+            try:
+                _, _, _, manifest = resolved_store.load(sid)
+                meta = extract_preview_metadata(manifest, sid)
+                items.append({
+                    "id": sid,
+                    "created_at": meta.get("created_at"),
+                    "profiles": meta.get("profiles", []),
+                    "terminal_tabs_count": meta.get("terminal_tabs_count", 0),
+                    "gui_projects_count": meta.get("gui_projects_count", 0)
+                })
+            except Exception:
+                items.append({"id": sid, "error": "unreadable"})
+        return json.dumps({"count": len(items), "snapshots": items}, ensure_ascii=False, indent=2)
 
+    @mcp.tool(
+        name="uncrash_preview_snapshot",
+        description="Extract terminal tabs, GUI applications and launch scripts for a specific snapshot."
+    )
+    def mcp_preview_snapshot(snapshot_id: str = "latest") -> str:
+        from .preview import extract_preview_metadata
+        _, _, _, manifest = resolved_store.load(snapshot_id)
+        meta = extract_preview_metadata(manifest, snapshot_id)
+        return json.dumps(meta, ensure_ascii=False, indent=2)
+
+    @mcp.tool(
+        name="uncrash_launch_terminal_tabs",
+        description="Launch recorded terminal tabs from a snapshot in the system terminal (gnome-terminal)."
+    )
+    def mcp_launch_terminal_tabs(snapshot_id: str = "latest", dry_run: bool = False) -> str:
+        from .preview import extract_preview_metadata, launch_terminal_tabs
+        _, _, _, manifest = resolved_store.load(snapshot_id)
+        meta = extract_preview_metadata(manifest, snapshot_id)
+        res = launch_terminal_tabs(meta["terminal_tabs"], dry_run=dry_run)
+        return json.dumps(res, ensure_ascii=False, indent=2)
+
+    return mcp

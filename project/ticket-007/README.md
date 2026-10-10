@@ -17,7 +17,8 @@ Add ability to preview recorded windows, GUI applications, and terminal tabs fro
 - [x] AC-03: Support isolated graphical preview on a private virtual display with noVNC (`--novnc`, `--port`, `--screenshot`) using TigerVNC/websockify when available.
 - [x] AC-04: Support generating and launching recorded terminal tabs in the system terminal (`gnome-terminal` / bash).
 - [x] AC-05: Unit and regression test suite verifying preview extraction, command line interface, and graceful degradation when display tools are absent.
-- [x] AC-06: Managed governance check passes cleanly with 0 errors.
+- [x] AC-06: Web client served via `uncrash serve --port <PORT>` providing interactive dashboard to graphically inspect snapshots, recorded terminal tabs, launch noVNC preview or system terminal tabs.
+- [x] AC-07: Managed governance check passes cleanly with 0 errors.
 
 ## Tracking boundary
 
