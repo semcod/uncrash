@@ -1,0 +1,97 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-011",
+  "summary": "Verify noVNC preview availability before opening recovered sessions",
+  "workstream": "application",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "requested"
+  },
+  "allowedPaths": [
+    "project/ticket-011/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "app/uncrash-recovery/server.py",
+    "app/uncrash-recovery/tests/test_server.py",
+    "app/uncrash-recovery/web/index.html"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "993c49e554aec20c6fb3f3eaedf3a71b828f2792",
+    "targetBranch": "main",
+    "outcome": "Verify actual noVNC HTTP preview availability and stop stale unavailable previews; deliver tested commit and PR, with protected OneDev/Validator merge only when an independently configured profile exists.",
+    "nonGoals": [
+      "No recovery engine, dependency manifest, Willmux catalog/UI, user session restart, SSH transfer, protected CI profile or production service changes.",
+      "HTTP readiness does not attest an authenticated RFB session or recovered RAM/PTY."
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 30,
+    "budgets": {
+      "maxImplementationFiles": 3,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Use a direct loopback HTTP GET without proxy or redirects; require bounded successful noVNC HTML. Gate frames and separate-window links by observed preview availability. Preserve session identity and existing API shape.",
+      "components": [
+        {
+          "name": "APX preview availability",
+          "paths": [
+            "app/uncrash-recovery/server.py",
+            "app/uncrash-recovery/web/index.html",
+            "app/uncrash-recovery/tests/test_server.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "multi-state",
+        "states": [
+          "loading",
+          "empty",
+          "error",
+          "success"
+        ],
+        "evidence": [
+          "Real isolated browser request/readback and HTTP negative-probe receipt"
+        ]
+      },
+      "rollback": "Revert this ticket implementation commit; no runtime state migration."
+    },
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "Run real local HTTP readiness positive/negative tests, including unrelated service, redirects, missing page, oversized content and timeouts."
+        ],
+        "evidence": "Only bounded noVNC HTML is available; failed previews are stopped."
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "Run isolated Chromium with active/stopped inventory and stale selected URL, then refresh after availability changes."
+        ],
+        "evidence": "Available sessions open independently; stopped sessions have no frame or actionable separate-window link."
+      },
+      {
+        "criterion": "AC-03",
+        "commands": [
+          "Run focused APX and full Uncrash tests and managed governance."
+        ],
+        "evidence": "Commit/PR is exact-head validated; protected publication remains pending absent independently deployed profiles."
+      }
+    ],
+    "runtimeDependencies": []
+  }
+}
