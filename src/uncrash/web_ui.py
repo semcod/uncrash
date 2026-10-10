@@ -375,14 +375,43 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     let snapshots = [];
     let currentSnapshotId = null;
 
+    function updateUrl(params = {}) {
+      const url = new URL(window.location);
+      for (const [key, val] of Object.entries(params)) {
+        if (val === null || val === undefined || val === '') {
+          url.searchParams.delete(key);
+        } else {
+          url.searchParams.set(key, val);
+        }
+      }
+      window.history.replaceState({}, '', url.toString());
+    }
+
     async function loadSnapshots() {
       try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const queryParam = urlParams.get('q');
+        if (queryParam) {
+          document.getElementById('searchInput').value = queryParam;
+        }
+
         const res = await fetch('/api/v1/snapshots');
         const data = await res.json();
         snapshots = data.snapshots || [];
         renderSnapshotList();
-        if (snapshots.length > 0) {
-          selectSnapshot(snapshots[0].id);
+
+        const requestedSnapshot = urlParams.get('snapshot');
+        const requestedAction = urlParams.get('action');
+        const requestedTab = urlParams.get('tab');
+
+        if (requestedSnapshot && snapshots.some(s => s.id === requestedSnapshot)) {
+          await selectSnapshot(requestedSnapshot, requestedAction);
+        } else if (snapshots.length > 0) {
+          await selectSnapshot(snapshots[0].id, requestedAction);
+        }
+
+        if (requestedTab !== null && requestedTab !== undefined) {
+          setTimeout(() => focusTab(parseInt(requestedTab, 10)), 200);
         }
       } catch (err) {
         console.error('Failed to load snapshots:', err);
@@ -398,7 +427,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       filtered.forEach(s => {
         const li = document.createElement('li');
         li.className = `snapshot-item ${s.id === currentSnapshotId ? 'active' : ''}`;
-        li.onclick = () => selectSnapshot(s.id);
+        li.onclick = () => {
+          selectSnapshot(s.id);
+          updateUrl({ action: null, tab: null });
+        };
 
         const timeStr = s.created_at ? new Date(s.created_at).toLocaleTimeString() + ' · ' + new Date(s.created_at).toLocaleDateString() : 'Nieznany czas';
         const tabsCount = s.terminal_tabs_count || 0;
@@ -419,11 +451,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       });
     }
 
-    document.getElementById('searchInput').addEventListener('input', renderSnapshotList);
+    document.getElementById('searchInput').addEventListener('input', (e) => {
+      renderSnapshotList();
+      updateUrl({ q: e.target.value.trim() });
+    });
 
-    async function selectSnapshot(id) {
+    async function selectSnapshot(id, autoAction = null) {
       currentSnapshotId = id;
       renderSnapshotList();
+      updateUrl({ snapshot: id });
       const contentEl = document.getElementById('contentPane');
       contentEl.innerHTML = '<div class="empty-state">Ładowanie metadanych snapshotu...</div>';
 
@@ -431,6 +467,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const res = await fetch(`/api/v1/snapshots/${id}`);
         const data = await res.json();
         renderSnapshotDetails(data);
+        if (autoAction === 'novnc') {
+          launchNovnc(id);
+        } else if (autoAction === 'screenshot') {
+          captureScreenshot(id);
+        } else if (autoAction === 'launch-tabs') {
+          launchTabs(id);
+        }
       } catch (err) {
         contentEl.innerHTML = `<div class="empty-state" style="color:var(--red)">Błąd ładowania snapshotu: ${err.message}</div>`;
       }
@@ -447,11 +490,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (tabs.length === 0) {
         tabsHtml = '<p style="color:var(--text-muted)">Brak zapisanych interaktywnych kart terminala.</p>';
       } else {
-        tabsHtml = '<div class="tabs-grid">' + tabs.map(t => {
+        tabsHtml = '<div class="tabs-grid">' + tabs.map((t, idx) => {
           const provClass = t.provider ? `provider-${t.provider}` : 'provider-shell';
           const provLabel = t.provider ? t.provider.toUpperCase() : 'SHELL';
           return `
-            <div class="tab-card">
+            <div class="tab-card" id="tabCard${idx}" onclick="focusTab(${idx})" style="cursor:pointer; transition:border-color 0.2s, box-shadow 0.2s">
               <div class="tab-header">
                 <span class="tab-provider ${provClass}">${provLabel}</span>
                 <span style="font-size:0.75rem; color:var(--text-muted)">${t.terminal || 'brak tty'}</span>
@@ -505,7 +548,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       `;
     }
 
+    function focusTab(idx) {
+      updateUrl({ tab: idx });
+      document.querySelectorAll('.tab-card').forEach((el, i) => {
+        if (i === idx) {
+          el.style.borderColor = 'var(--accent)';
+          el.style.boxShadow = '0 0 12px rgba(137, 180, 250, 0.4)';
+        } else {
+          el.style.borderColor = 'var(--border)';
+          el.style.boxShadow = 'none';
+        }
+      });
+    }
+
+    function closePreviewArea() {
+      document.getElementById('previewArea').innerHTML = '';
+      updateUrl({ action: null });
+    }
+
     async function launchNovnc(id) {
+      updateUrl({ action: 'novnc' });
       const area = document.getElementById('previewArea');
       area.innerHTML = '<div style="padding:16px; background:var(--bg-card); border-radius:8px">Uruchamianie wirtualnego pulpitu noVNC...</div>';
       try {
@@ -517,7 +579,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <div class="novnc-container">
               <div style="background:var(--bg-surface); padding:8px 12px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border)">
                 <span style="font-size:0.85rem">Wirtualny ekran: <strong>${result.display}</strong> · Port: <strong>${result.ws_port}</strong></span>
-                <a href="${result.novnc_url}" target="_blank" class="btn" style="padding:4px 10px; font-size:0.75rem">Otwórz w nowej karcie ↗</a>
+                <div style="display:flex; gap:8px">
+                  <a href="${result.novnc_url}" target="_blank" class="btn" style="padding:4px 10px; font-size:0.75rem">Otwórz w nowej karcie ↗</a>
+                  <button class="btn" onclick="closePreviewArea()" style="padding:4px 10px; font-size:0.75rem">✕ Zamknij</button>
+                </div>
               </div>
               <iframe src="${result.novnc_url}" class="novnc-frame"></iframe>
             </div>
@@ -531,6 +596,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     async function captureScreenshot(id) {
+      updateUrl({ action: 'screenshot' });
       const area = document.getElementById('previewArea');
       area.innerHTML = '<div style="padding:16px; background:var(--bg-card); border-radius:8px">Generowanie zrzutu ekranu wirtualnego pulpitu...</div>';
       try {
@@ -539,7 +605,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         if (result.screenshot_url) {
           showToast('Zrzut ekranu wygenerowany pomyślnie!');
           area.innerHTML = `
-            <div style="margin-top:12px">
+            <div style="margin-top:12px; background:var(--bg-card); padding:12px; border-radius:8px; border:1px solid var(--border)">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px">
+                <span style="font-size:0.85rem; color:var(--text-muted)">Zrzut ekranu wirtualnego pulpitu:</span>
+                <button class="btn" onclick="closePreviewArea()" style="padding:4px 10px; font-size:0.75rem">✕ Zamknij podgląd</button>
+              </div>
               <img src="${result.screenshot_url}?t=${Date.now()}" class="screenshot-img" alt="Zrzut ekranu snapshotu">
             </div>
           `;
@@ -552,6 +622,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     async function launchTabs(id) {
+      updateUrl({ action: 'launch-tabs' });
       try {
         const res = await fetch(`/api/v1/snapshots/${id}/launch-tabs`, { method: 'POST' });
         const result = await res.json();
@@ -577,6 +648,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       toast.classList.add('show');
       setTimeout(() => toast.classList.remove('show'), 3000);
     }
+
+    window.addEventListener('popstate', () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const snap = urlParams.get('snapshot');
+      const action = urlParams.get('action');
+      if (snap && snap !== currentSnapshotId) {
+        selectSnapshot(snap, action);
+      }
+    });
 
     window.addEventListener('DOMContentLoaded', loadSnapshots);
   </script>

@@ -236,7 +236,10 @@ class VirtualPreviewDesktop:
         self.ws_port: Optional[int] = None
         self.processes: List[subprocess.Popen] = []
 
-    def start(self, summary_text: Optional[str] = None, port: Optional[int] = None) -> Dict[str, Any]:
+    def start(self,
+              summary_text: Optional[str] = None,
+              terminal_tabs: Optional[List[Dict[str, Any]]] = None,
+              port: Optional[int] = None) -> Dict[str, Any]:
         """Start Xtigervnc, window manager, websockify and preview windows."""
         vnc_bin = shutil.which('Xtigervnc') or shutil.which('Xvfb')
         if not vnc_bin:
@@ -272,12 +275,17 @@ class VirtualPreviewDesktop:
         # Wait briefly for VNC server to accept connections
         time.sleep(0.5)
 
-        # 2. Start Openbox window manager if present
+        # 2. Set root desktop background color
+        if shutil.which('xsetroot'):
+            subprocess.run(['xsetroot', '-solid', '#1e1e2e'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # 3. Start Openbox window manager if present
         if shutil.which('openbox'):
             p_wm = subprocess.Popen(['openbox', '--sm-disable'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.processes.append(p_wm)
+            time.sleep(0.4)
 
-        # 3. Start websockify / twinerd-bridge
+        # 4. Start websockify / twinerd-bridge
         if 'twinerd-bridge' in str(websockify_bin):
             ws_cmd = [websockify_bin, '--listen', f'127.0.0.1:{self.ws_port}', '--target', f'127.0.0.1:{self.rfb_port}', '--web', str(self.novnc_dir)]
         else:
@@ -285,21 +293,53 @@ class VirtualPreviewDesktop:
         p_ws = subprocess.Popen(ws_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.processes.append(p_ws)
 
-        # 4. If summary text provided and xterm available, launch an informational window
-        if summary_text and shutil.which('xterm'):
-            summary_file = _temp_dir() / f'.uncrash-preview-{self.display}.txt'
-            summary_file.write_text(summary_text)
-            term_cmd = [
-                'xterm',
-                '-T', 'Uncrash Snapshot Preview',
-                '-geometry', '110x35+50+50',
-                '-bg', '#1e1e2e',
-                '-fg', '#cdd6f4',
-                '-hold',
-                '-e', 'cat', str(summary_file)
-            ]
-            p_term = subprocess.Popen(term_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self.processes.append(p_term)
+        # 5. Launch preview windows for recorded terminal tabs
+        if shutil.which('xterm'):
+            tabs_to_show = (terminal_tabs or [])[:2]
+            for idx, tab in enumerate(tabs_to_show):
+                prov = (tab.get('provider') or 'shell').upper()
+                tab_file = _temp_dir() / f'.uncrash-tab-{self.display}-{idx}.txt'
+                tab_file.write_text(
+                    f"[{prov}] {tab.get('title')}\n"
+                    f"Working Dir: {tab.get('cwd')}\n"
+                    f"Command:     {tab.get('resume_command')}\n"
+                    f"Terminal:    {tab.get('terminal', 'none')}\n"
+                    f"{'=' * 50}\n"
+                    f"$ cd {tab.get('cwd')}\n"
+                    f"$ {tab.get('resume_command')}\n"
+                )
+                pos_x = 480 + (idx * 60)
+                pos_y = 60 + (idx * 160)
+                tab_cmd = [
+                    'xterm',
+                    '-T', f"{prov}: {tab.get('title')}",
+                    '-geometry', f'65x16+{pos_x}+{pos_y}',
+                    '-bg', '#181825',
+                    '-fg', '#89b4fa' if prov == 'AGY' else '#a6e3a1' if prov == 'CODEX' else '#cdd6f4',
+                    '-hold',
+                    '-e', 'cat', str(tab_file)
+                ]
+                p_tab = subprocess.Popen(tab_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.processes.append(p_tab)
+
+            # 6. Informational summary window
+            if summary_text:
+                summary_file = _temp_dir() / f'.uncrash-preview-{self.display}.txt'
+                summary_file.write_text(summary_text)
+                term_cmd = [
+                    'xterm',
+                    '-T', 'Uncrash Snapshot Overview',
+                    '-geometry', '80x30+40+40',
+                    '-bg', '#11111b',
+                    '-fg', '#cdd6f4',
+                    '-hold',
+                    '-e', 'cat', str(summary_file)
+                ]
+                p_term = subprocess.Popen(term_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.processes.append(p_term)
+
+        # Allow windows to map and decorate
+        time.sleep(0.8)
 
         novnc_url = f'http://127.0.0.1:{self.ws_port}/vnc.html?autoconnect=true&resize=scale'
         return {
@@ -316,24 +356,46 @@ class VirtualPreviewDesktop:
             raise RecoveryError('Virtual display not started')
         destination = Path(destination).resolve()
         destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.unlink(missing_ok=True)
 
         env = {**os.environ, 'DISPLAY': f':{self.display}'}
-        time.sleep(0.6)  # allow windows to map
+        time.sleep(0.8)  # allow windows to complete map and render
 
+        # Try ffmpeg x11grab first (most accurate on virtual X11 framebuffers)
+        if shutil.which('ffmpeg'):
+            ff_cmd = [
+                'ffmpeg', '-y', '-f', 'x11grab', '-draw_mouse', '0',
+                '-i', f':{self.display}.0',
+                '-frames:v', '1', str(destination)
+            ]
+            subprocess.run(ff_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if destination.exists() and destination.stat().st_size > 3500:
+                return destination
+
+        # Fallback to scrot with overwrite
         scrot_bin = shutil.which('scrot')
         if scrot_bin:
-            subprocess.run([scrot_bin, '--display', f':{self.display}', str(destination)], env=env, check=True)
-            return destination
+            destination.unlink(missing_ok=True)
+            subprocess.run([scrot_bin, '--overwrite', '--display', f':{self.display}', str(destination)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if destination.exists() and destination.stat().st_size > 3500:
+                return destination
 
+        # Fallback to xwd + convert or xwd + ffmpeg
         xwd_bin = shutil.which('xwd')
-        if xwd_bin and shutil.which('convert'):
+        if xwd_bin:
             temp_xwd = destination.with_suffix('.xwd')
-            subprocess.run([xwd_bin, '-display', f':{self.display}', '-root', '-out', str(temp_xwd)], env=env, check=True)
-            subprocess.run(['convert', str(temp_xwd), str(destination)], check=True)
+            subprocess.run([xwd_bin, '-display', f':{self.display}', '-root', '-out', str(temp_xwd)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if shutil.which('convert'):
+                subprocess.run(['convert', str(temp_xwd), str(destination)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif shutil.which('ffmpeg'):
+                subprocess.run(['ffmpeg', '-y', '-i', str(temp_xwd), str(destination)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             temp_xwd.unlink(missing_ok=True)
-            return destination
+            if destination.exists() and destination.stat().st_size > 3500:
+                return destination
 
-        raise RecoveryError('scrot or xwd+convert required to capture screenshot')
+        if destination.exists():
+            return destination
+        raise RecoveryError('Failed to capture non-empty screenshot from virtual display')
 
     def stop(self) -> None:
         """Terminate all background desktop processes and clean up."""
@@ -398,7 +460,7 @@ def preview_snapshot(store: Store,
 
         desktop = VirtualPreviewDesktop()
         try:
-            desktop_info = desktop.start(summary_text=summary_text, port=port)
+            desktop_info = desktop.start(summary_text=summary_text, terminal_tabs=metadata.get('terminal_tabs', []), port=port)
             metadata['novnc'] = desktop_info
             if screenshot:
                 shot_path = desktop.capture_screenshot(screenshot)
