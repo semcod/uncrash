@@ -263,3 +263,100 @@ def test_installed_service_restart_and_real_five_minute_capture():
         'snapshots': [first, second, third], 'profile_count': 0, 'personal_app_data_backed_up': False}
     path = Path(os.environ['UNCRASH_SERVICE_RECEIPT'])
     path.write_text(json.dumps(receipt, indent=2)+'\n')
+
+
+def test_extract_preview_metadata():
+    from uncrash.preview import extract_preview_metadata
+    manifest = {
+        'schema': 'uncrash.snapshot/v1',
+        'id': '20261010T010203000000-abcdef123456',
+        'created_at': '2026-10-10T01:02:03+00:00',
+        'profiles': [{'id': 'codex-sessions'}, {'id': 'agy-sessions'}],
+        'session_hosts': {
+            'processes': [
+                {'pid': 1234, 'name': 'codex', 'provider': 'codex', 'role': 'client', 'cwd': '/home/tom/proj-a', 'terminal': '/dev/pts/1'},
+                {'pid': 1235, 'name': 'agy', 'provider': 'agy', 'role': 'client', 'cwd': '/home/tom/proj-b', 'terminal': '/dev/pts/2'},
+                {'pid': 1236, 'name': 'codex', 'provider': 'codex', 'role': 'server', 'cwd': '/home/tom/proj-c', 'terminal': None},
+            ]
+        },
+        'jetbrains': {
+            'open_projects': ['/home/tom/proj-ide'],
+            'last_opened_project': '/home/tom/proj-ide',
+            'closed_projects': ['/home/tom/proj-old'],
+            'descendants': [
+                {'pid': 9999, 'name': 'bash', 'cwd': '/home/tom/proj-ide', 'terminal': '/dev/pts/5'}
+            ]
+        }
+    }
+    meta = extract_preview_metadata(manifest)
+    assert meta['schema'] == 'uncrash.snapshot-preview/v1'
+    assert meta['snapshot'] == '20261010T010203000000-abcdef123456'
+    assert meta['profiles'] == ['codex-sessions', 'agy-sessions']
+    assert meta['terminal_tabs_count'] == 3
+    # Check codex client tab
+    t0 = meta['terminal_tabs'][0]
+    assert t0['provider'] == 'codex'
+    assert t0['cwd'] == '/home/tom/proj-a'
+    assert t0['resume_command'] == 'codex resume --last'
+    # Check agy client tab
+    t1 = meta['terminal_tabs'][1]
+    assert t1['provider'] == 'agy'
+    assert t1['cwd'] == '/home/tom/proj-b'
+    assert t1['resume_command'] == 'agy --continue'
+    # Check jetbrains descendant tab
+    t2 = meta['terminal_tabs'][2]
+    assert t2['cwd'] == '/home/tom/proj-ide'
+    assert t2['terminal'] == '/dev/pts/5'
+    # Check GUI projects
+    assert meta['gui_projects_count'] == 2
+    assert meta['gui_projects'][0]['path'] == '/home/tom/proj-ide'
+    assert meta['gui_projects'][0]['state'] == 'open'
+    # Check system terminal command
+    assert meta['system_terminal_command'][0] == 'gnome-terminal'
+    assert '--tab' in meta['system_terminal_command']
+    assert 'gnome-terminal' in meta['launch_script']
+
+
+def test_launch_terminal_tabs_dry_run():
+    from uncrash.preview import launch_terminal_tabs
+    tabs = [
+        {'title': 'codex (proj)', 'cwd': '/tmp', 'resume_command': 'codex resume --last', 'gnome_terminal_args': ['--tab', '--title=codex', '--working-directory=/tmp', '--', 'bash']}
+    ]
+    res = launch_terminal_tabs(tabs, dry_run=True)
+    assert res['status'] == 'planned'
+    assert res['dry_run'] is True
+    assert res['tabs_count'] == 1
+
+
+def test_preview_cli_integration(fixture, tmp_path, monkeypatch, capsys):
+    from uncrash.cli import main
+    source, store, config = fixture
+    config['origin'] = store.origin
+    sid = store.capture(config)['snapshot']
+    config_file = tmp_path / 'config.json'
+    config_file.write_text(json.dumps(config))
+
+    # Run preview --json
+    code = main(['--state', str(store.root), '--config', str(config_file), 'preview', sid, '--json'])
+    assert code == 0
+    captured = capsys.readouterr()
+    res = json.loads(captured.out)
+    assert res['snapshot'] == sid
+    assert res['schema'] == 'uncrash.snapshot-preview/v1'
+
+    # Run preview --launch-tabs --dry-run
+    code = main(['--state', str(store.root), '--config', str(config_file), 'preview', sid, '--launch-tabs', '--dry-run', '--json'])
+    assert code == 0
+    captured = capsys.readouterr()
+    res = json.loads(captured.out)
+    assert 'tabs_launch_result' in res
+
+
+def test_virtual_preview_desktop_missing_binary(tmp_path, monkeypatch):
+    from uncrash.preview import VirtualPreviewDesktop
+    desktop = VirtualPreviewDesktop(novnc_dir=tmp_path)
+    monkeypatch.setattr('shutil.which', lambda name: None)
+    with pytest.raises(RecoveryError, match='executable not found'):
+        desktop.start()
+
+
