@@ -723,6 +723,10 @@ class WorkspaceSession:
     project_path: Optional[str] = None
     host: str = "local"
 
+    @property
+    def status(self) -> str:
+        return 'running' if self.is_alive() else 'stopped'
+
     def is_alive(self) -> bool:
         return any(p.poll() is None for p in self.desktop.processes)
 
