@@ -342,6 +342,52 @@ def launch_terminal_tabs(terminal_tabs: List[Dict[str, Any]], *, dry_run: bool =
     }
 
 
+def setup_jetbrains_sandbox(workspace_dir: Path,
+                            display: int,
+                            project_path: Optional[str] = None,
+                            executable: Optional[str] = None) -> Dict[str, Any]:
+    """Configure an isolated JetBrains JVM runtime avoiding single-instance locks and host crosstalk."""
+    sandbox_dir = Path(workspace_dir) / f"jetbrains_display_{display}"
+    config_dir = sandbox_dir / "config"
+    system_dir = sandbox_dir / "system"
+    plugins_dir = sandbox_dir / "plugins"
+    log_dir = sandbox_dir / "log"
+    for d in (config_dir, system_dir, plugins_dir, log_dir):
+        d.mkdir(parents=True, exist_ok=True)
+
+    selector = f"UncrashPyCharm_disp{display}_{uuid.uuid4().hex[:6]}"
+    vmoptions_path = sandbox_dir / "uncrash.vmoptions"
+    vmoptions_content = (
+        "-Xms128m\n"
+        "-Xmx1024m\n"
+        f"-Didea.config.path={config_dir}\n"
+        f"-Didea.system.path={system_dir}\n"
+        f"-Didea.log.path={log_dir}\n"
+        f"-Didea.plugins.path={plugins_dir}\n"
+        f"-Didea.paths.selector={selector}\n"
+        "-Dawt.toolkit.name=XToolkit\n"
+        "-Dsun.java2d.pmoffscreen=false\n"
+    )
+    vmoptions_path.write_text(vmoptions_content)
+
+    resolved_exe = executable
+    if not resolved_exe:
+        from .recovery import find_pycharm_executable
+        resolved_exe = find_pycharm_executable()
+
+    return {
+        'sandbox_dir': str(sandbox_dir),
+        'vmoptions_path': str(vmoptions_path),
+        'config_dir': str(config_dir),
+        'system_dir': str(system_dir),
+        'plugins_dir': str(plugins_dir),
+        'log_dir': str(log_dir),
+        'selector': selector,
+        'executable': resolved_exe,
+        'project_path': project_path,
+    }
+
+
 class VirtualPreviewDesktop:
     """Manages an isolated virtual X11 display with TigerVNC and noVNC."""
 
@@ -358,6 +404,7 @@ class VirtualPreviewDesktop:
     def start(self,
               summary_text: Optional[str] = None,
               terminal_tabs: Optional[List[Dict[str, Any]]] = None,
+              gui_apps: Optional[List[Dict[str, Any]]] = None,
               port: Optional[int] = None,
               interactive: bool = False,
               engine: str = "native",
@@ -515,6 +562,74 @@ class VirtualPreviewDesktop:
                     p_term = subprocess.Popen(term_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     self.processes.append(p_term)
 
+        # 6. Launch GUI applications (e.g. isolated PyCharm, IDEs, or generic GUI commands)
+        if gui_apps:
+            ws_path = Path(workspace_dir) if workspace_dir else _temp_dir() / f"uncrash_ws_{self.display}"
+            ws_path.mkdir(parents=True, exist_ok=True)
+            for app_idx, app in enumerate(gui_apps):
+                app_name = app.get('name', 'GUI Application')
+                app_type = app.get('type') or ('pycharm' if 'pycharm' in app_name.lower() or 'pycharm' in str(app.get('executable', '')).lower() or app.get('project') else 'generic')
+                proj_path = app.get('project')
+                exe = app.get('executable')
+
+                if app_type == 'pycharm':
+                    sb = setup_jetbrains_sandbox(ws_path, self.display, proj_path, executable=exe)
+                    app_env = {
+                        **env,
+                        'DISPLAY': display_str,
+                        'PYCHARM_VM_OPTIONS': sb['vmoptions_path'],
+                        'JETBRAINS_CONFIG_DIR': sb['config_dir'],
+                        'JETBRAINS_SYSTEM_DIR': sb['system_dir'],
+                        'JETBRAINS_PLUGINS_DIR': sb['plugins_dir'],
+                        'JETBRAINS_LOG_DIR': sb['log_dir'],
+                    }
+                    if sb.get('executable') and (Path(sb['executable']).exists() or shutil.which(sb['executable'])):
+                        cmd = [sb['executable']]
+                        if proj_path:
+                            cmd.append(str(proj_path))
+                        try:
+                            p_app = subprocess.Popen(cmd, env=app_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            self.processes.append(p_app)
+                        except OSError:
+                            pass
+
+                    # Also launch status/banner window in xterm
+                    if shutil.which('xterm'):
+                        info_msg = (
+                            f"=== TWINERD WORKSPACE: {app_name.upper()} ===\n"
+                            f"Projekt:      {proj_path or 'Domyślny'}\n"
+                            f"Silnik:       {engine.upper()}\n"
+                            f"Display:      {display_str} (izolowany)\n"
+                            f"Port noVNC:   {self.ws_port}\n"
+                            f"Środowisko:   Pełna izolacja JVM (brak blokad hosta)\n"
+                            f"VM Options:   {sb['vmoptions_path']}\n"
+                            f"Katalogi:     {sb['sandbox_dir']}\n"
+                            f"===================================================\n"
+                        )
+                        info_file = ws_path / f"app_{app_idx}_info.txt"
+                        info_file.write_text(info_msg)
+                        info_term_cmd = [
+                            'xterm',
+                            '-T', f"[TWINERD] {app_name} - {Path(proj_path).name if proj_path else 'Workspace'}",
+                            '-geometry', f'72x16+30+{40 + app_idx * 260}',
+                            '-bg', '#181825',
+                            '-fg', '#a6e3a1',
+                            '-e', 'bash', '-c', f"cat '{info_file}'; exec bash"
+                        ]
+                        try:
+                            p_info = subprocess.Popen(info_term_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            self.processes.append(p_info)
+                        except OSError:
+                            pass
+                elif app.get('command'):
+                    cmd = app['command']
+                    app_env = {**env, 'DISPLAY': display_str}
+                    try:
+                        p_app = subprocess.Popen(cmd, env=app_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        self.processes.append(p_app)
+                    except OSError:
+                        pass
+
         # Allow windows to map and decorate
         time.sleep(0.8)
 
@@ -604,6 +719,9 @@ class WorkspaceSession:
     engine: str = "native"
     workspace_dir: Optional[str] = None
     staged_files_count: int = 0
+    gui_apps: List[Dict[str, Any]] = field(default_factory=list)
+    project_path: Optional[str] = None
+    host: str = "local"
 
     def is_alive(self) -> bool:
         return any(p.poll() is None for p in self.desktop.processes)
@@ -628,7 +746,10 @@ class WorkspaceSession:
             'tabs_count': self.tabs_count,
             'created_at': self.created_at,
             'status': 'running' if self.is_alive() else 'stopped',
-            'terminal_tabs': self.terminal_tabs
+            'terminal_tabs': self.terminal_tabs,
+            'gui_apps': self.gui_apps,
+            'project_path': self.project_path,
+            'host': self.host,
         }
 
 
@@ -656,14 +777,17 @@ class WorkspaceManager:
             return None
 
     def create_or_get_workspace(self,
-                                snapshot_id: str,
-                                terminal_tabs: List[Dict[str, Any]],
+                                snapshot_id: str = "custom",
+                                terminal_tabs: Optional[List[Dict[str, Any]]] = None,
+                                gui_apps: Optional[List[Dict[str, Any]]] = None,
+                                project_path: Optional[str] = None,
                                 workspace_id: Optional[str] = None,
                                 name: Optional[str] = None,
                                 force_new: bool = False,
                                 engine: str = "native",
                                 manifest: Optional[Dict[str, Any]] = None,
-                                port: Optional[int] = None) -> WorkspaceSession:
+                                port: Optional[int] = None,
+                                host: str = "local") -> WorkspaceSession:
         with self._lock:
             engine_prefixes = {
                 'native': 'ws',
@@ -673,12 +797,13 @@ class WorkspaceManager:
                 'pelorus': 'pelorus',
             }
             prefix = engine_prefixes.get(engine, "ws")
+            slug = Path(project_path).name.lower() if project_path else snapshot_id
             if workspace_id:
                 wid = workspace_id
             elif force_new:
-                wid = f"{prefix}-{snapshot_id}-{int(time.time()) % 100000:05d}"
+                wid = f"{prefix}-{slug}-{int(time.time()) % 100000:05d}"
             else:
-                wid = f"{prefix}-{snapshot_id}"
+                wid = f"{prefix}-{slug}"
 
             if not force_new and wid in self.workspaces and self.workspaces[wid].is_alive():
                 return self.workspaces[wid]
@@ -915,10 +1040,36 @@ CMD ["/bin/bash"]
                     fallback.mkdir(parents=True, exist_ok=True)
                     staging_dir = str(fallback)
 
+            if host == "minis" or host.startswith("tom@"):
+                if not staging_dir:
+                    minis_tmp = _temp_dir() / f"minis_{wid}"
+                    minis_tmp.mkdir(parents=True, exist_ok=True)
+                    staging_dir = str(minis_tmp)
+                minis_cfg = {
+                    "workspace_id": wid,
+                    "target_host": host,
+                    "engine": engine,
+                    "project_path": project_path,
+                    "gui_apps": gui_apps or [],
+                    "terminal_tabs_count": len(terminal_tabs or []),
+                    "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "status": "ready_for_minis_transfer",
+                }
+                minis_file = Path(staging_dir) / "minis_transfer.json"
+                minis_file.write_text(json.dumps(minis_cfg, indent=2))
+                staged_count += 1
+
             desktop = VirtualPreviewDesktop()
-            info = desktop.start(terminal_tabs=terminal_tabs, port=port, interactive=True, engine=engine, workspace_dir=staging_dir)
+            info = desktop.start(
+                terminal_tabs=terminal_tabs,
+                gui_apps=gui_apps,
+                port=port,
+                interactive=True,
+                engine=engine,
+                workspace_dir=staging_dir
+            )
             engine_info = SUPPORTED_ENGINES.get(engine, {})
-            ws_name = name or f"{engine_info.get('name', engine.title())} ({snapshot_id[:16]})"
+            ws_name = name or (f"{Path(project_path).name} [Twinerd {engine.upper()}]" if project_path else f"{engine_info.get('name', engine.title())} ({snapshot_id[:16]})")
             session = WorkspaceSession(
                 workspace_id=wid,
                 snapshot_id=snapshot_id,
@@ -927,13 +1078,16 @@ CMD ["/bin/bash"]
                 rfb_port=info['rfb_port'],
                 ws_port=info['ws_port'],
                 novnc_url=info['novnc_url'],
-                tabs_count=len(terminal_tabs),
+                tabs_count=len(terminal_tabs or []),
                 created_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 desktop=desktop,
-                terminal_tabs=terminal_tabs,
+                terminal_tabs=terminal_tabs or [],
                 engine=engine,
                 workspace_dir=staging_dir,
-                staged_files_count=staged_count
+                staged_files_count=staged_count,
+                gui_apps=gui_apps or [],
+                project_path=project_path,
+                host=host
             )
             self.workspaces[wid] = session
             return session
@@ -948,6 +1102,94 @@ CMD ["/bin/bash"]
 
 
 workspace_manager = WorkspaceManager()
+
+
+def restore_project_in_workspace(project_path: str,
+                                 app_name: str = 'pycharm',
+                                 workspace_id: Optional[str] = None,
+                                 engine: str = 'native',
+                                 host: str = 'local',
+                                 port: Optional[int] = None,
+                                 executable: Optional[str] = None) -> WorkspaceSession:
+    """Restore a specific project in an isolated Twinerd virtual workspace with noVNC."""
+    p_path = Path(project_path).resolve()
+    p_name = p_path.name or str(p_path)
+    tabs = [{
+        'title': f"Project: {p_name}",
+        'cwd': str(p_path),
+        'provider': 'uncrash',
+        'resume_command': f"cd '{p_path}'"
+    }]
+    apps = [{
+        'name': app_name,
+        'type': 'pycharm' if 'pycharm' in app_name.lower() else 'generic',
+        'project': str(p_path),
+        'executable': executable
+    }]
+    name = f"{app_name.title()}: {p_name} [Twinerd {engine.upper()}]"
+    wid = workspace_id or f"ws-{app_name.lower()}-{p_name.lower().replace(' ', '-')[:16]}-{int(time.time()) % 10000:04d}"
+    return workspace_manager.create_or_get_workspace(
+        snapshot_id=f"proj-{p_name.lower()[:16]}",
+        terminal_tabs=tabs,
+        gui_apps=apps,
+        project_path=str(p_path),
+        workspace_id=wid,
+        name=name,
+        force_new=True,
+        engine=engine,
+        port=port,
+        host=host
+    )
+
+
+def restore_all_projects_isolated(projects: List[str],
+                                  app_name: str = 'pycharm',
+                                  engine: str = 'native',
+                                  host: str = 'local') -> List[WorkspaceSession]:
+    """Restore multiple projects, each in its OWN separate Twinerd workspace on distinct displays."""
+    sessions = []
+    for proj in projects:
+        if not proj:
+            continue
+        sess = restore_project_in_workspace(
+            project_path=proj,
+            app_name=app_name,
+            engine=engine,
+            host=host
+        )
+        sessions.append(sess)
+    return sessions
+
+
+def restore_application_in_workspace(app_spec: Dict[str, Any],
+                                     workspace_id: Optional[str] = None,
+                                     engine: str = 'native',
+                                     host: str = 'local',
+                                     port: Optional[int] = None) -> WorkspaceSession:
+    """Restore an arbitrary GUI application in an isolated Twinerd virtual workspace."""
+    app_name = app_spec.get('name', 'Application')
+    proj = app_spec.get('project')
+    cwd = proj or app_spec.get('cwd') or str(Path.home())
+    tabs = [{
+        'title': f"Console: {app_name}",
+        'cwd': str(cwd),
+        'provider': 'uncrash',
+        'resume_command': 'echo Ready'
+    }]
+    name = f"{app_name} [Twinerd {engine.upper()}]"
+    wid = workspace_id or f"ws-{app_name.lower().replace(' ', '-')[:16]}-{int(time.time()) % 10000:04d}"
+    return workspace_manager.create_or_get_workspace(
+        snapshot_id=f"app-{app_name.lower().replace(' ', '-')[:16]}",
+        terminal_tabs=tabs,
+        gui_apps=[app_spec],
+        project_path=proj,
+        workspace_id=wid,
+        name=name,
+        force_new=True,
+        engine=engine,
+        port=port,
+        host=host
+    )
 
 
 def preview_snapshot(store: Store,
