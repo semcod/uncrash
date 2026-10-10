@@ -30,9 +30,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       background-color: var(--bg-base);
       color: var(--text-main);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      min-height: 100vh;
+      height: 100vh;
       display: flex;
       flex-direction: column;
+      overflow: hidden;
     }
     header {
       background: var(--bg-surface);
@@ -41,6 +42,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       display: flex;
       justify-content: space-between;
       align-items: center;
+      flex-shrink: 0;
     }
     .logo {
       display: flex;
@@ -70,8 +72,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .layout {
       display: flex;
       flex: 1;
+      min-height: 0;
       overflow: hidden;
-      height: calc(100vh - 57px);
     }
     .sidebar {
       width: 360px;
@@ -336,6 +338,73 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       pointer-events: none;
     }
     .toast.show { opacity: 1; }
+    .workspaces-bar {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      overflow-x: auto;
+      flex-shrink: 0;
+    }
+    .workspaces-label {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+    .workspace-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 4px 12px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+      user-select: none;
+    }
+    .workspace-chip:hover {
+      border-color: var(--accent);
+      background: var(--bg-hover);
+    }
+    .workspace-chip.active {
+      border-color: var(--accent);
+      background: #26293d;
+      color: var(--accent);
+      font-weight: 600;
+      box-shadow: 0 0 10px rgba(137, 180, 250, 0.3);
+    }
+    .chip-close {
+      color: var(--text-muted);
+      font-weight: bold;
+      margin-left: 4px;
+      padding: 0 4px;
+      border-radius: 50%;
+      transition: color 0.15s, background 0.15s;
+    }
+    .chip-close:hover {
+      color: var(--red);
+      background: rgba(243, 139, 168, 0.2);
+    }
+    .btn.accent-btn {
+      background: var(--accent);
+      color: #11111b;
+      border-color: var(--accent);
+      font-weight: 700;
+    }
+    .btn.accent-btn:hover {
+      background: var(--accent-hover);
+    }
   </style>
 </head>
 <body>
@@ -347,9 +416,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="header-links">
       <a href="/docs" target="_blank">API Docs</a>
       <a href="/api/v1/registry" target="_blank">Registry</a>
+      <a href="/api/v1/workspaces" target="_blank">Workspaces</a>
       <a href="/api/v1/health" target="_blank">Health</a>
     </div>
   </header>
+
+  <div id="workspacesBar" class="workspaces-bar" style="display:none">
+    <div class="workspaces-label">
+      <span>🖥️ noVNC Workspaces:</span>
+    </div>
+    <div id="workspacesChips" style="display:flex; gap:8px; align-items:center; flex:1; overflow-x:auto;"></div>
+    <button class="btn" style="padding:3px 8px; font-size:0.75rem" onclick="fetchWorkspaces(true)">🔄 Odśwież</button>
+  </div>
 
   <div class="layout">
     <aside class="sidebar">
@@ -473,6 +551,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           captureScreenshot(id);
         } else if (autoAction === 'launch-tabs') {
           launchTabs(id);
+        } else if (autoAction === 'workspace') {
+          const wsParam = new URLSearchParams(window.location.search).get('workspace');
+          if (wsParam) {
+            selectWorkspace(wsParam);
+          } else {
+            launchWorkspace(id, false);
+          }
         }
       } catch (err) {
         contentEl.innerHTML = `<div class="empty-state" style="color:var(--red)">Błąd ładowania snapshotu: ${err.message}</div>`;
@@ -529,6 +614,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <button class="btn primary" onclick="launchNovnc('${data.snapshot}')">🖥️ Podgląd noVNC</button>
             <button class="btn" onclick="captureScreenshot('${data.snapshot}')">📸 Zrzut ekranu</button>
             <button class="btn success" onclick="launchTabs('${data.snapshot}')">💻 Uruchom taby w terminalu</button>
+            <button class="btn accent-btn" onclick="launchWorkspace('${data.snapshot}')">🌐 Uruchom w noVNC (Workspace)</button>
+            <button class="btn" onclick="launchWorkspace('${data.snapshot}', true)" title="Uruchom kolejny niezależny workspace noVNC dla tej sesji">+ Nowy Workspace</button>
           </div>
         </div>
 
@@ -548,6 +635,139 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       `;
     }
 
+    let activeWorkspaces = [];
+    let currentWorkspaceId = null;
+
+    async function fetchWorkspaces(notify = false) {
+      try {
+        const res = await fetch('/api/v1/workspaces');
+        const data = await res.json();
+        activeWorkspaces = data.workspaces || [];
+        renderWorkspacesBar();
+        if (notify) showToast(`Znaleziono ${activeWorkspaces.length} aktywnych workspace'ów`);
+      } catch (err) {
+        console.error('Failed to fetch workspaces:', err);
+      }
+    }
+
+    function renderWorkspacesBar() {
+      const bar = document.getElementById('workspacesBar');
+      const chips = document.getElementById('workspacesChips');
+      if (!bar || !chips) return;
+
+      if (activeWorkspaces.length === 0) {
+        bar.style.display = 'none';
+        return;
+      }
+      bar.style.display = 'flex';
+      chips.innerHTML = activeWorkspaces.map(ws => {
+        const isActive = ws.workspace_id === currentWorkspaceId;
+        const shortName = ws.name || ws.workspace_id;
+        const tabsInfo = ws.tabs_count > 0 ? `${ws.tabs_count} tab(ów)` : (ws.display || '');
+        return `
+          <div class="workspace-chip ${isActive ? 'active' : ''}" onclick="selectWorkspace('${ws.workspace_id}')">
+            <span>●</span>
+            <span><strong>${shortName}</strong> (${tabsInfo})</span>
+            <span class="chip-close" onclick="event.stopPropagation(); closeWorkspace('${ws.workspace_id}')" title="Zamknij workspace">✕</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function launchWorkspace(snapshotId, forceNew = false) {
+      updateUrl({ snapshot: snapshotId, action: 'workspace' });
+      const area = document.getElementById('previewArea');
+      area.innerHTML = '<div style="padding:16px; background:var(--bg-card); border-radius:8px">Tworzenie i uruchamianie dedykowanego workspace noVNC dla sesji...</div>';
+      try {
+        const url = `/api/v1/snapshots/${snapshotId}/workspace${forceNew ? '?force_new=true' : ''}`;
+        const res = await fetch(url, { method: 'POST' });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || `HTTP ${res.status}`);
+        }
+        const ws = await res.json();
+        currentWorkspaceId = ws.workspace_id;
+        updateUrl({ snapshot: snapshotId, action: 'workspace', workspace: ws.workspace_id });
+        renderWorkspacePreview(ws);
+        await fetchWorkspaces();
+        showToast(`Workspace '${ws.workspace_id}' został uruchomiony!`);
+      } catch (err) {
+        area.innerHTML = `<div style="padding:16px; color:var(--red)">Błąd uruchamiania workspace noVNC: ${err.message}</div>`;
+      }
+    }
+
+    async function selectWorkspace(workspaceId) {
+      currentWorkspaceId = workspaceId;
+      renderWorkspacesBar();
+      updateUrl({ action: 'workspace', workspace: workspaceId });
+      const existing = activeWorkspaces.find(w => w.workspace_id === workspaceId);
+      if (existing) {
+        if (existing.snapshot_id && existing.snapshot_id !== 'twinerd' && existing.snapshot_id !== currentSnapshotId) {
+          await selectSnapshot(existing.snapshot_id, 'workspace');
+          return;
+        }
+        renderWorkspacePreview(existing);
+      } else {
+        try {
+          const res = await fetch(`/api/v1/workspaces/${workspaceId}`);
+          if (res.ok) {
+            const ws = await res.json();
+            renderWorkspacePreview(ws);
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      }
+    }
+
+    function renderWorkspacePreview(ws) {
+      currentWorkspaceId = ws.workspace_id;
+      renderWorkspacesBar();
+      const area = document.getElementById('previewArea');
+      const tabsCount = ws.tabs_count || (ws.terminal_tabs ? ws.terminal_tabs.length : 0);
+      area.innerHTML = `
+        <div class="novnc-container">
+          <div style="background:var(--bg-surface); padding:10px 16px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); flex-wrap:wrap; gap:8px">
+            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap">
+              <span style="font-weight:700; font-size:0.95rem">🖥️ Workspace: <strong>${ws.workspace_id}</strong></span>
+              <span class="tag tabs">${tabsCount} aktywnych kart</span>
+              <span style="font-size:0.8rem; color:var(--text-muted)">Ekran: <code>${ws.display}</code> · Port WS: <code>${ws.ws_port}</code> · RFB: <code>${ws.rfb_port}</code></span>
+            </div>
+            <div style="display:flex; gap:8px">
+              <a href="${ws.novnc_url}" target="_blank" class="btn" style="padding:4px 10px; font-size:0.75rem">Otwórz w nowej karcie ↗</a>
+              <button class="btn" onclick="reloadNovncIframe()" style="padding:4px 10px; font-size:0.75rem">🔄 Odśwież</button>
+              <button class="btn" onclick="closeWorkspace('${ws.workspace_id}')" style="padding:4px 10px; font-size:0.75rem; color:var(--red); border-color:var(--red)">✕ Zamknij Workspace</button>
+              <button class="btn" onclick="closePreviewArea()" style="padding:4px 10px; font-size:0.75rem">✕ Ukryj</button>
+            </div>
+          </div>
+          <iframe id="novncIframe" src="${ws.novnc_url}" class="novnc-frame" style="height:680px"></iframe>
+        </div>
+      `;
+    }
+
+    function reloadNovncIframe() {
+      const iframe = document.getElementById('novncIframe');
+      if (iframe) iframe.src = iframe.src;
+    }
+
+    async function closeWorkspace(workspaceId) {
+      if (!confirm(`Czy na pewno chcesz zamknąć workspace '${workspaceId}' i zakończyć uruchomione w nim procesy?`)) {
+        return;
+      }
+      try {
+        const res = await fetch(`/api/v1/workspaces/${workspaceId}/close`, { method: 'POST' });
+        const result = await res.json();
+        showToast(`Workspace '${workspaceId}' został zamknięty`);
+        if (currentWorkspaceId === workspaceId) {
+          currentWorkspaceId = null;
+          closePreviewArea();
+        }
+        await fetchWorkspaces();
+      } catch (err) {
+        showToast('Błąd zamykania workspace: ' + err.message);
+      }
+    }
+
     function focusTab(idx) {
       updateUrl({ tab: idx });
       document.querySelectorAll('.tab-card').forEach((el, i) => {
@@ -563,7 +783,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     function closePreviewArea() {
       document.getElementById('previewArea').innerHTML = '';
-      updateUrl({ action: null });
+      currentWorkspaceId = null;
+      renderWorkspacesBar();
+      updateUrl({ action: null, workspace: null });
     }
 
     async function launchNovnc(id) {
@@ -653,12 +875,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const urlParams = new URLSearchParams(window.location.search);
       const snap = urlParams.get('snapshot');
       const action = urlParams.get('action');
+      const ws = urlParams.get('workspace');
       if (snap && snap !== currentSnapshotId) {
         selectSnapshot(snap, action);
+      } else if (action === 'workspace' && ws && ws !== currentWorkspaceId) {
+        selectWorkspace(ws);
       }
     });
 
-    window.addEventListener('DOMContentLoaded', loadSnapshots);
+    window.addEventListener('DOMContentLoaded', async () => {
+      await loadSnapshots();
+      await fetchWorkspaces();
+      setInterval(fetchWorkspaces, 15000);
+    });
   </script>
 </body>
 </html>

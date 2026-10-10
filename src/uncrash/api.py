@@ -79,6 +79,36 @@ OPERATIONS_REGISTRY = [
             "snapshot_id": {"type": "string", "description": "Snapshot ID or 'latest'", "default": "latest"},
             "dry_run": {"type": "boolean", "description": "Report planned command without launching", "default": False}
         }
+    },
+    {
+        "id": "uncrash.workspaces.list",
+        "name": "list_workspaces",
+        "description": "List active isolated noVNC virtual desktop workspaces running snapshot sessions via Twinerd.",
+        "protocols": ["cli", "rest", "mcp"],
+        "schema": "uncrash.workspaces-list/v1",
+        "parameters": {}
+    },
+    {
+        "id": "uncrash.workspaces.create",
+        "name": "create_snapshot_workspace",
+        "description": "Launch a dedicated noVNC workspace running all recorded terminal tabs for a specific snapshot.",
+        "protocols": ["cli", "rest", "mcp"],
+        "schema": "uncrash.workspace-session/v1",
+        "parameters": {
+            "snapshot_id": {"type": "string", "description": "Snapshot ID to restore/preview in workspace"},
+            "workspace_id": {"type": "string", "description": "Optional custom workspace identifier", "required": False},
+            "force_new": {"type": "boolean", "description": "Force creating a new workspace rather than reusing existing", "default": False}
+        }
+    },
+    {
+        "id": "uncrash.workspaces.close",
+        "name": "close_workspace",
+        "description": "Close an active noVNC virtual desktop workspace and stop all its processes.",
+        "protocols": ["cli", "rest", "mcp"],
+        "schema": "uncrash.workspace-close/v1",
+        "parameters": {
+            "workspace_id": {"type": "string", "description": "Workspace ID to close"}
+        }
     }
 ]
 
@@ -227,6 +257,70 @@ def create_fastapi_app(store=None, config=None):
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
+    @app.get("/api/v1/workspaces")
+    def get_workspaces():
+        from .preview import workspace_manager
+        ws_list = workspace_manager.list_workspaces()
+        try:
+            from twinerd_mcp.targets import TargetRegistry
+            reg = TargetRegistry()
+            targets = reg.discover_targets()
+            for t in targets:
+                if t.vnc_port and not any(w["workspace_id"] == t.id for w in ws_list):
+                    ws_port = t.vnc_port + 1000
+                    ws_list.append({
+                        "workspace_id": t.id,
+                        "snapshot_id": "twinerd",
+                        "name": f"Twinerd: {t.name}",
+                        "display": t.details.get("display") or f":{t.vnc_port - 5900}",
+                        "rfb_port": t.vnc_port,
+                        "ws_port": ws_port,
+                        "novnc_url": f"http://127.0.0.1:{ws_port}/vnc.html?autoconnect=true",
+                        "tabs_count": 0,
+                        "created_at": "",
+                        "status": t.status,
+                        "source": "twinerd"
+                    })
+        except Exception:
+            pass
+        return {"schema": "uncrash.workspaces-list/v1", "count": len(ws_list), "workspaces": ws_list}
+
+    @app.post("/api/v1/snapshots/{snapshot_id}/workspace")
+    def post_create_workspace(snapshot_id: str,
+                              workspace_id: Optional[str] = None,
+                              name: Optional[str] = None,
+                              force_new: bool = False,
+                              port: Optional[int] = None):
+        from .preview import extract_preview_metadata, workspace_manager
+        try:
+            _, _, _, manifest = resolved_store.load(snapshot_id)
+            meta = extract_preview_metadata(manifest, snapshot_id)
+            ws = workspace_manager.create_or_get_workspace(
+                snapshot_id=snapshot_id,
+                terminal_tabs=meta["terminal_tabs"],
+                workspace_id=workspace_id,
+                name=name,
+                force_new=force_new,
+                port=port
+            )
+            return ws.to_dict()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/v1/workspaces/{workspace_id}")
+    def get_workspace_details(workspace_id: str):
+        from .preview import workspace_manager
+        ws = workspace_manager.get_workspace(workspace_id)
+        if not ws:
+            raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' not found or stopped")
+        return ws.to_dict()
+
+    @app.post("/api/v1/workspaces/{workspace_id}/close")
+    def post_close_workspace(workspace_id: str):
+        from .preview import workspace_manager
+        closed = workspace_manager.close_workspace(workspace_id)
+        return {"status": "ok" if closed else "not_found", "closed": closed, "workspace_id": workspace_id}
+
     return app
 
 
@@ -346,5 +440,39 @@ def create_mcp_server(store=None, config=None):
         meta = extract_preview_metadata(manifest, snapshot_id)
         res = launch_terminal_tabs(meta["terminal_tabs"], dry_run=dry_run)
         return json.dumps(res, ensure_ascii=False, indent=2)
+
+    @mcp.tool(
+        name="uncrash_list_workspaces",
+        description="List active isolated noVNC virtual desktop workspaces running snapshot sessions via Twinerd."
+    )
+    def mcp_list_workspaces() -> str:
+        from .preview import workspace_manager
+        workspaces = workspace_manager.list_workspaces()
+        return json.dumps({"count": len(workspaces), "workspaces": workspaces}, ensure_ascii=False, indent=2)
+
+    @mcp.tool(
+        name="uncrash_create_workspace",
+        description="Launch a dedicated noVNC workspace running all recorded terminal tabs for a specific snapshot."
+    )
+    def mcp_create_workspace(snapshot_id: str = "latest", workspace_id: Optional[str] = None, force_new: bool = False) -> str:
+        from .preview import extract_preview_metadata, workspace_manager
+        _, _, _, manifest = resolved_store.load(snapshot_id)
+        meta = extract_preview_metadata(manifest, snapshot_id)
+        ws = workspace_manager.create_or_get_workspace(
+            snapshot_id=snapshot_id,
+            terminal_tabs=meta["terminal_tabs"],
+            workspace_id=workspace_id,
+            force_new=force_new
+        )
+        return json.dumps(ws.to_dict(), ensure_ascii=False, indent=2)
+
+    @mcp.tool(
+        name="uncrash_close_workspace",
+        description="Close an active noVNC virtual desktop workspace and stop all its processes."
+    )
+    def mcp_close_workspace(workspace_id: str) -> str:
+        from .preview import workspace_manager
+        closed = workspace_manager.close_workspace(workspace_id)
+        return json.dumps({"status": "ok" if closed else "not_found", "closed": closed, "workspace_id": workspace_id}, ensure_ascii=False, indent=2)
 
     return mcp

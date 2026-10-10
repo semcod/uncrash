@@ -1,6 +1,7 @@
 """Preview recorded windows and terminal tabs from snapshots before restore with noVNC."""
 from __future__ import annotations
 
+import datetime
 import json
 import os
 from pathlib import Path
@@ -9,7 +10,9 @@ import shlex
 import shutil
 import socket
 import subprocess
+import threading
 import time
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from .store import RecoveryError, no_links, Store
@@ -239,7 +242,8 @@ class VirtualPreviewDesktop:
     def start(self,
               summary_text: Optional[str] = None,
               terminal_tabs: Optional[List[Dict[str, Any]]] = None,
-              port: Optional[int] = None) -> Dict[str, Any]:
+              port: Optional[int] = None,
+              interactive: bool = False) -> Dict[str, Any]:
         """Start Xtigervnc, window manager, websockify and preview windows."""
         vnc_bin = shutil.which('Xtigervnc') or shutil.which('Xvfb')
         if not vnc_bin:
@@ -293,50 +297,85 @@ class VirtualPreviewDesktop:
         p_ws = subprocess.Popen(ws_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.processes.append(p_ws)
 
-        # 5. Launch preview windows for recorded terminal tabs
+        # 5. Launch windows
         if shutil.which('xterm'):
-            tabs_to_show = (terminal_tabs or [])[:2]
-            for idx, tab in enumerate(tabs_to_show):
-                prov = (tab.get('provider') or 'shell').upper()
-                tab_file = _temp_dir() / f'.uncrash-tab-{self.display}-{idx}.txt'
-                tab_file.write_text(
-                    f"[{prov}] {tab.get('title')}\n"
-                    f"Working Dir: {tab.get('cwd')}\n"
-                    f"Command:     {tab.get('resume_command')}\n"
-                    f"Terminal:    {tab.get('terminal', 'none')}\n"
-                    f"{'=' * 50}\n"
-                    f"$ cd {tab.get('cwd')}\n"
-                    f"$ {tab.get('resume_command')}\n"
-                )
-                pos_x = 480 + (idx * 60)
-                pos_y = 60 + (idx * 160)
-                tab_cmd = [
-                    'xterm',
-                    '-T', f"{prov}: {tab.get('title')}",
-                    '-geometry', f'65x16+{pos_x}+{pos_y}',
-                    '-bg', '#181825',
-                    '-fg', '#89b4fa' if prov == 'AGY' else '#a6e3a1' if prov == 'CODEX' else '#cdd6f4',
-                    '-hold',
-                    '-e', 'cat', str(tab_file)
-                ]
-                p_tab = subprocess.Popen(tab_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                self.processes.append(p_tab)
+            if interactive:
+                # Interactive workspace mode: launch actual interactive shells for each tab
+                tabs = terminal_tabs if terminal_tabs else [{'title': 'Interactive Shell', 'provider': 'shell', 'cwd': str(Path.home()), 'resume_command': 'bash'}]
+                total = min(len(tabs), 6)
+                cols = 2 if total <= 4 else 3
+                w_geom = 70 if cols == 2 else 56
+                h_geom = 22 if total <= 2 else 18
+                for idx, tab in enumerate(tabs[:6]):
+                    prov = (tab.get('provider') or 'shell').upper()
+                    cwd = tab.get('cwd') or str(Path.home())
+                    resume_cmd = tab.get('resume_command') or 'echo Ready'
+                    col = idx % cols
+                    row = idx // cols
+                    pos_x = 30 + (col * (1200 // cols))
+                    pos_y = 40 + (row * 370)
+                    fg = '#89b4fa' if prov == 'AGY' else '#a6e3a1' if prov == 'CODEX' else '#fab387' if prov == 'CLAUDE' else '#cdd6f4'
+                    sh_cmd = (
+                        f"cd '{cwd}' && "
+                        f"echo '=== Uncrash Workspace [{prov}]: {tab.get('title')} ===' && "
+                        f"echo 'Katalog roboczy: {cwd}' && "
+                        f"echo 'Wznowienie:      {resume_cmd}' && "
+                        f"echo '===================================================' && "
+                        f"{resume_cmd}; exec bash"
+                    )
+                    tab_cmd = [
+                        'xterm',
+                        '-T', f"[{prov}] {tab.get('title')}",
+                        '-geometry', f'{w_geom}x{h_geom}+{pos_x}+{pos_y}',
+                        '-bg', '#181825',
+                        '-fg', fg,
+                        '-e', 'bash', '-c', sh_cmd
+                    ]
+                    p_tab = subprocess.Popen(tab_cmd, env=env)
+                    self.processes.append(p_tab)
+            else:
+                # Preview mode: static/held windows with commands and summary overview
+                tabs_to_show = (terminal_tabs or [])[:2]
+                for idx, tab in enumerate(tabs_to_show):
+                    prov = (tab.get('provider') or 'shell').upper()
+                    tab_file = _temp_dir() / f'.uncrash-tab-{self.display}-{idx}.txt'
+                    tab_file.write_text(
+                        f"[{prov}] {tab.get('title')}\n"
+                        f"Working Dir: {tab.get('cwd')}\n"
+                        f"Command:     {tab.get('resume_command')}\n"
+                        f"Terminal:    {tab.get('terminal', 'none')}\n"
+                        f"{'=' * 50}\n"
+                        f"$ cd {tab.get('cwd')}\n"
+                        f"$ {tab.get('resume_command')}\n"
+                    )
+                    pos_x = 480 + (idx * 60)
+                    pos_y = 60 + (idx * 160)
+                    tab_cmd = [
+                        'xterm',
+                        '-T', f"{prov}: {tab.get('title')}",
+                        '-geometry', f'65x16+{pos_x}+{pos_y}',
+                        '-bg', '#181825',
+                        '-fg', '#89b4fa' if prov == 'AGY' else '#a6e3a1' if prov == 'CODEX' else '#cdd6f4',
+                        '-hold',
+                        '-e', 'cat', str(tab_file)
+                    ]
+                    p_tab = subprocess.Popen(tab_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    self.processes.append(p_tab)
 
-            # 6. Informational summary window
-            if summary_text:
-                summary_file = _temp_dir() / f'.uncrash-preview-{self.display}.txt'
-                summary_file.write_text(summary_text)
-                term_cmd = [
-                    'xterm',
-                    '-T', 'Uncrash Snapshot Overview',
-                    '-geometry', '80x30+40+40',
-                    '-bg', '#11111b',
-                    '-fg', '#cdd6f4',
-                    '-hold',
-                    '-e', 'cat', str(summary_file)
-                ]
-                p_term = subprocess.Popen(term_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                self.processes.append(p_term)
+                if summary_text:
+                    summary_file = _temp_dir() / f'.uncrash-preview-{self.display}.txt'
+                    summary_file.write_text(summary_text)
+                    term_cmd = [
+                        'xterm',
+                        '-T', 'Uncrash Snapshot Overview',
+                        '-geometry', '80x30+40+40',
+                        '-bg', '#11111b',
+                        '-fg', '#cdd6f4',
+                        '-hold',
+                        '-e', 'cat', str(summary_file)
+                    ]
+                    p_term = subprocess.Popen(term_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    self.processes.append(p_term)
 
         # Allow windows to map and decorate
         time.sleep(0.8)
@@ -408,6 +447,112 @@ class VirtualPreviewDesktop:
                     p.kill()
                     p.wait(timeout=1)
         self.processes.clear()
+
+
+@dataclass
+class WorkspaceSession:
+    """Active instance of an isolated multi-tab noVNC workspace."""
+    workspace_id: str
+    snapshot_id: str
+    name: str
+    display: str
+    rfb_port: int
+    ws_port: int
+    novnc_url: str
+    tabs_count: int
+    created_at: str
+    desktop: VirtualPreviewDesktop
+    terminal_tabs: List[Dict[str, Any]]
+
+    def is_alive(self) -> bool:
+        return any(p.poll() is None for p in self.desktop.processes)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'workspace_id': self.workspace_id,
+            'snapshot_id': self.snapshot_id,
+            'name': self.name,
+            'display': self.display,
+            'rfb_port': self.rfb_port,
+            'ws_port': self.ws_port,
+            'novnc_url': self.novnc_url,
+            'tabs_count': self.tabs_count,
+            'created_at': self.created_at,
+            'status': 'running' if self.is_alive() else 'stopped',
+            'terminal_tabs': self.terminal_tabs
+        }
+
+
+class WorkspaceManager:
+    """Manages isolated noVNC workspaces for snapshots via Twinerd / TigerVNC."""
+
+    def __init__(self):
+        self.workspaces: Dict[str, WorkspaceSession] = {}
+        self._lock = threading.RLock()
+
+    def list_workspaces(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            dead = [wid for wid, ws in self.workspaces.items() if not ws.is_alive()]
+            for wid in dead:
+                self.workspaces.pop(wid, None)
+            return [ws.to_dict() for ws in self.workspaces.values()]
+
+    def get_workspace(self, workspace_id: str) -> Optional[WorkspaceSession]:
+        with self._lock:
+            ws = self.workspaces.get(workspace_id)
+            if ws and ws.is_alive():
+                return ws
+            if ws and not ws.is_alive():
+                self.workspaces.pop(workspace_id, None)
+            return None
+
+    def create_or_get_workspace(self,
+                                snapshot_id: str,
+                                terminal_tabs: List[Dict[str, Any]],
+                                workspace_id: Optional[str] = None,
+                                name: Optional[str] = None,
+                                force_new: bool = False,
+                                port: Optional[int] = None) -> WorkspaceSession:
+        with self._lock:
+            if workspace_id:
+                wid = workspace_id
+            elif force_new:
+                wid = f"ws-{snapshot_id}-{int(time.time()) % 100000:05d}"
+            else:
+                wid = f"ws-{snapshot_id}"
+
+            if not force_new and wid in self.workspaces and self.workspaces[wid].is_alive():
+                return self.workspaces[wid]
+
+            desktop = VirtualPreviewDesktop()
+            info = desktop.start(terminal_tabs=terminal_tabs, port=port, interactive=True)
+            ws_name = name or f"Workspace ({snapshot_id[:16]})"
+            session = WorkspaceSession(
+                workspace_id=wid,
+                snapshot_id=snapshot_id,
+                name=ws_name,
+                display=info['display'],
+                rfb_port=info['rfb_port'],
+                ws_port=info['ws_port'],
+                novnc_url=info['novnc_url'],
+                tabs_count=len(terminal_tabs),
+                created_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                desktop=desktop,
+                terminal_tabs=terminal_tabs
+            )
+            self.workspaces[wid] = session
+            return session
+
+    def close_workspace(self, workspace_id: str) -> bool:
+        with self._lock:
+            ws = self.workspaces.pop(workspace_id, None)
+            if ws:
+                ws.desktop.stop()
+                return True
+            return False
+
+
+workspace_manager = WorkspaceManager()
 
 
 def preview_snapshot(store: Store,
