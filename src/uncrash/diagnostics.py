@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 from urllib.parse import quote
 
@@ -120,7 +121,123 @@ def session_hosts(proc_root=Path('/proc')):
                 'Reparented, multiplexed, remote or container clients can remain unresolved.']}
 
 
-def provider_inventory(home):
+def check_sqlite_integrity(path: Path) -> tuple[str, str | None]:
+    """Check SQLite integrity using PRAGMA quick_check with read-only URI and timeout."""
+    if not path.is_file():
+        return 'missing', f'File does not exist: {path}'
+    connection = None
+    try:
+        connection = sqlite3.connect('file:' + quote(str(no_links(path)), safe='/') + '?mode=ro', uri=True, timeout=1.0)
+        cur = connection.cursor()
+        cur.execute('PRAGMA quick_check;')
+        res = cur.fetchone()
+        if not res or res[0] != 'ok':
+            msg = res[0] if res else 'empty result'
+            return 'corrupted', f'quick_check failed: {msg}'
+        return 'ok', None
+    except Exception as e:
+        return 'corrupted', str(e)
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def scan_agent_log_panics(log_dir: Path, max_files: int = 20) -> list[dict]:
+    """Scan recent agent log files for unhandled panic/crash signatures."""
+    if not log_dir.is_dir():
+        return []
+    panics = []
+    log_files = sorted(log_dir.glob('*.log'), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)[:max_files]
+    panic_patterns = [
+        re.compile(r'Caught panic:\s*(.*)', re.IGNORECASE),
+        re.compile(r'runtime error:\s*(invalid memory address or nil pointer dereference.*)', re.IGNORECASE),
+        re.compile(r'Failed to load conversation ([a-f0-9-]+):\s*(.*database disk image is malformed.*)', re.IGNORECASE),
+        re.compile(r'program was killed:\s*(program experienced a panic.*)', re.IGNORECASE),
+    ]
+    for log_path in log_files:
+        try:
+            with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read(512 * 1024)
+            for pattern in panic_patterns:
+                match = pattern.search(content)
+                if match:
+                    panics.append({
+                        'log_path': str(log_path),
+                        'log_name': log_path.name,
+                        'signature': match.group(0).strip(),
+                        'matched_detail': match.group(1).strip() if match.lastindex else match.group(0).strip(),
+                    })
+                    break
+        except (OSError, UnicodeError):
+            continue
+    return panics
+
+
+def check_agent_storage_health(home: Path) -> dict:
+    """Comprehensive health and integrity check for coding agent storage across providers."""
+    home = Path(home)
+    report = {
+        'schema': 'uncrash.llm-session-diagnostics/v1',
+        'observed_at': datetime.now(timezone.utc).isoformat(),
+        'status': 'HEALTHY',
+        'providers': {},
+        'corrupted_sessions': [],
+        'detected_panics': [],
+    }
+
+    # Antigravity (agy)
+    agy_root = home / '.gemini/antigravity-cli'
+    if agy_root.is_dir():
+        corrupt_dbs = []
+        checked_count = 0
+        conv_dir = agy_root / 'conversations'
+        if conv_dir.is_dir():
+            for db_path in sorted(conv_dir.glob('*.db')):
+                checked_count += 1
+                status, err = check_sqlite_integrity(db_path)
+                if status != 'ok':
+                    corrupt_dbs.append({
+                        'provider': 'agy',
+                        'session_id': db_path.stem,
+                        'path': str(db_path),
+                        'error': err or 'unknown integrity failure',
+                        'remediation': f'sqlite3 {db_path} .dump > dump.sql && sqlite3 restored.db < dump.sql',
+                    })
+
+        summary_db = agy_root / 'conversation_summaries.db'
+        summary_status = 'not-present'
+        if summary_db.is_file():
+            s_status, s_err = check_sqlite_integrity(summary_db)
+            summary_status = s_status
+            if s_status != 'ok':
+                corrupt_dbs.append({
+                    'provider': 'agy',
+                    'session_id': 'conversation_summaries',
+                    'path': str(summary_db),
+                    'error': s_err or 'summary database malformed',
+                    'remediation': 'restore from SQLite dump or regenerate summaries',
+                })
+
+        panics = scan_agent_log_panics(agy_root / 'log')
+
+        report['providers']['agy'] = {
+            'checked_sessions': checked_count,
+            'summary_integrity': summary_status,
+            'corrupted_count': len(corrupt_dbs),
+            'panic_count': len(panics),
+        }
+        report['corrupted_sessions'].extend(corrupt_dbs)
+        report['detected_panics'].extend(panics)
+
+    if report['corrupted_sessions']:
+        report['status'] = 'CORRUPTED'
+    elif report['detected_panics']:
+        report['status'] = 'DEGRADED'
+
+    return report
+
+
+def provider_inventory(home, check_integrity=False):
     home = Path(home); result = {}; ids = []; labels = Counter(); invalid = 0
     files = list((home / '.codex/sessions').rglob('*.jsonl'))
     for path in files:
@@ -138,16 +255,25 @@ def provider_inventory(home):
                        'invalid_metadata': invalid, 'source_labels': dict(labels), 'host_binding': 'not-present'}
     root = no_links(home / '.gemini/antigravity-cli'); db_files = {p.stem for p in (root / 'conversations').glob('*.db')}
     summary = root / 'conversation_summaries.db'; connection = None
+    corrupted_dbs = []
     try:
         connection = sqlite3.connect('file:' + quote(str(no_links(summary)), safe='/') + '?mode=ro', uri=True, timeout=1)
         rows = [r[0] for r in connection.execute('SELECT conversation_id FROM conversation_summaries')]
         valid = {r for r in rows if isinstance(r, str)}
+        if check_integrity:
+            for db_file in (root / 'conversations').glob('*.db'):
+                st, err = check_sqlite_integrity(db_file)
+                if st != 'ok':
+                    corrupted_dbs.append({'id': db_file.stem, 'error': err})
+            integrity_status = 'corrupted' if corrupted_dbs else 'ok'
+        else:
+            integrity_status = 'not-checked'
         result['agy'] = {'summary_rows': len(rows), 'unique_summary_ids': len(valid), 'db_files': len(db_files),
             'summary_with_file': len(valid & db_files), 'summary_without_file': len(valid - db_files),
             'file_without_summary': len(db_files - valid), 'host_binding': 'not-present',
-            'database_integrity': 'not-checked', 'resume_verified': False}
+            'database_integrity': integrity_status, 'corrupted_sessions': corrupted_dbs, 'resume_verified': False}
     except (OSError, sqlite3.Error, RecoveryError):
-        result['agy'] = {'db_files': len(db_files), 'summary_status': 'unavailable'}
+        result['agy'] = {'db_files': len(db_files), 'summary_status': 'unavailable', 'database_integrity': 'unavailable'}
     finally:
         if connection is not None: connection.close()
     result['claude'] = {'jsonl_files': sum(1 for _ in (home / '.claude/projects').rglob('*.jsonl')),

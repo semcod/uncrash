@@ -1,0 +1,26 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-010",
+  "summary": "detect LLM session storage corruption and panic issues",
+  "workstream": "application",
+  "classification": {
+    "kind": "SERVICE",
+    "priority": "P2",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-010/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/diagnostics.py",
+    "src/uncrash/recovery.py",
+    "tests/test_diagnostics.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null
+}

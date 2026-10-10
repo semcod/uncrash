@@ -180,3 +180,65 @@ def test_daemon_failure_code_is_durable_without_private_exception(tmp_path, caps
     runtime.run_daemon(Store(), {}, stop=Stop())
     text = capsys.readouterr().out + next((tmp_path / 'logs').glob('*.jsonl')).read_text()
     assert 'UNCRASH-SQLITE-BACKUP' in text and 'PRIVATE' not in text
+
+
+def test_sqlite_integrity_detection_identifies_corrupt_database(tmp_path):
+    healthy_db = tmp_path / 'healthy.db'
+    with sqlite3.connect(healthy_db) as c:
+        c.execute('CREATE TABLE t (id INT);')
+        c.execute('INSERT INTO t VALUES (1);')
+    status, err = d.check_sqlite_integrity(healthy_db)
+    assert status == 'ok' and err is None
+
+    broken_db = tmp_path / 'broken.db'
+    broken_db.write_bytes(b'SQLite format 3\x00corrupted bytes invalid page')
+    status, err = d.check_sqlite_integrity(broken_db)
+    assert status == 'corrupted' and err is not None
+
+
+def test_scan_agent_log_panics_finds_unhandled_panics(tmp_path):
+    log_dir = tmp_path / 'log'
+    log_dir.mkdir()
+    log_file = log_dir / 'cli-20261010_120000.log'
+    log_file.write_text(
+        "I1010 12:00:00 server.go:3185 GetConversationDetail: found conversation abc-123\n"
+        "Caught panic: runtime error: invalid memory address or nil pointer dereference\n"
+        "Restoring terminal...\n"
+    )
+    panics = d.scan_agent_log_panics(log_dir)
+    assert len(panics) == 1
+    assert 'runtime error: invalid memory address' in panics[0]['signature']
+    assert panics[0]['log_name'] == 'cli-20261010_120000.log'
+
+
+def test_check_agent_storage_health_reports_corruptions(tmp_path):
+    home = tmp_path / 'home'
+    agy_conv = home / '.gemini/antigravity-cli/conversations'
+    agy_conv.mkdir(parents=True)
+    good_db = agy_conv / 'good.db'
+    with sqlite3.connect(good_db) as c:
+        c.execute('CREATE TABLE steps (id INT);')
+    bad_db = agy_conv / 'bad.db'
+    bad_db.write_bytes(b'SQLite format 3\x00' + b'\xff' * 100)
+
+    report = d.check_agent_storage_health(home)
+    assert report['status'] == 'CORRUPTED'
+    assert len(report['corrupted_sessions']) >= 1
+    corrupt_ids = {s['session_id'] for s in report['corrupted_sessions']}
+    assert 'bad' in corrupt_ids
+
+
+def test_salvage_agent_session_db(tmp_path):
+    src = tmp_path / 'test_session.db'
+    with sqlite3.connect(src) as c:
+        c.execute('CREATE TABLE steps (idx INT PRIMARY KEY, content TEXT);')
+        c.execute('INSERT INTO steps VALUES (1, "step one");')
+
+    dest = tmp_path / 'salvaged.db'
+    receipt = recovery.salvage_agent_session_db(src, dest)
+    assert receipt['status'] == 'COMPLETED'
+    assert dest.is_file()
+    with sqlite3.connect(dest) as c:
+        cnt = c.execute('SELECT count(*) FROM steps').fetchone()[0]
+        assert cnt == 1
+
