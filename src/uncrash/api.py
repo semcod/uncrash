@@ -118,6 +118,22 @@ OPERATIONS_REGISTRY = [
         "parameters": {
             "workspace_id": {"type": "string", "description": "Workspace ID to close"}
         }
+    },
+    {
+        "id": "uncrash.system.gpu",
+        "name": "get_gpu_status",
+        "description": "Inspect host GPU hardware (NVIDIA GeForce/RTX/CUDA, VRAM, temperature, driver) and GPU tools.",
+        "protocols": ["cli", "rest", "mcp"],
+        "schema": "uncrash.gpu-status/v1",
+        "parameters": {}
+    },
+    {
+        "id": "uncrash.system.applications",
+        "name": "get_installed_applications",
+        "description": "Discover and classify all installed PC applications (NVIDIA, AI agents, IDEs, browsers, terminals, virtualization) with recovery profiles.",
+        "protocols": ["cli", "rest", "mcp"],
+        "schema": "uncrash.application-matrix/v1",
+        "parameters": {}
     }
 ]
 
@@ -339,6 +355,16 @@ def create_fastapi_app(store=None, config=None):
         closed = workspace_manager.close_workspace(workspace_id)
         return {"status": "ok" if closed else "not_found", "closed": closed, "workspace_id": workspace_id}
 
+    @app.get("/api/v1/system/gpu")
+    def get_system_gpu():
+        from .inventory import get_gpu_status
+        return get_gpu_status()
+
+    @app.get("/api/v1/system/applications")
+    def get_system_applications():
+        from .inventory import get_application_matrix
+        return get_application_matrix()
+
     return app
 
 
@@ -502,5 +528,21 @@ def create_mcp_server(store=None, config=None):
         from .preview import workspace_manager
         closed = workspace_manager.close_workspace(workspace_id)
         return json.dumps({"status": "ok" if closed else "not_found", "closed": closed, "workspace_id": workspace_id}, ensure_ascii=False, indent=2)
+
+    @mcp.tool(
+        name="uncrash_get_gpu_status",
+        description="Inspect host GPU hardware (NVIDIA GeForce/RTX/CUDA, VRAM, temperature, driver) and GPU utilities."
+    )
+    def mcp_get_gpu_status() -> str:
+        from .inventory import get_gpu_status
+        return json.dumps(get_gpu_status(), ensure_ascii=False, indent=2)
+
+    @mcp.tool(
+        name="uncrash_get_installed_applications",
+        description="Discover and classify all installed PC applications (NVIDIA, AI agents, IDEs, browsers, terminals, virtualization) with recovery profiles."
+    )
+    def mcp_get_installed_applications() -> str:
+        from .inventory import get_application_matrix
+        return json.dumps(get_application_matrix(), ensure_ascii=False, indent=2)
 
     return mcp

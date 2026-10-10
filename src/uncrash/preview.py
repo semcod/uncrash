@@ -252,6 +252,48 @@ def extract_preview_metadata(manifest: Dict[str, Any], snapshot_id: Optional[str
         for p in closed_projects:
             if p not in open_projects:
                 gui_projects.append({'path': p, 'state': 'closed', 'is_last': (p == last_closed)})
+    # 3. Extract recorded GUI applications from snapshot processes
+    recorded_gui_apps = []
+    seen_app_names = set()
+    procs = manifest.get('processes', [])
+    gui_names = {
+        'chrome': 'Google Chrome',
+        'chromium': 'Chromium',
+        'blender': 'Blender (GPU)',
+        'nautilus': 'Nautilus File Manager',
+        'cursor': 'Cursor AI Editor',
+        'code': 'VS Code',
+        'antigravity': 'Antigravity IDE',
+        'warp-terminal': 'Warp Terminal',
+        'zed': 'Zed Editor',
+        'nvidia-settings': 'NVIDIA Settings',
+        'nvtop': 'NVTOP GPU Monitor',
+        'remmina': 'Remmina Remote Desktop',
+        'virt-manager': 'Virtual Machine Manager',
+        'qemu-system-x86_64': 'QEMU Virtual Machine',
+        'devin-desktop': 'Devin Desktop',
+        'opencode-desktop': 'OpenCode Desktop',
+        'qoder': 'Qoder AI Assistant',
+        'strawberry': 'Strawberry Music Player',
+        'gnome-terminal-': 'GNOME Terminal'
+    }
+    for proc in procs:
+        if not isinstance(proc, dict):
+            continue
+        pname = proc.get('name', '')
+        for k, v in gui_names.items():
+            if k in pname.lower() and v not in seen_app_names:
+                seen_app_names.add(v)
+                recorded_gui_apps.append({
+                    'id': k,
+                    'name': v,
+                    'pid': proc.get('pid'),
+                    'cmd': proc.get('name') or k,
+                    'status': 'recorded_active'
+                })
+
+    from .inventory import get_gpu_status
+    gpu_info = get_gpu_status()
 
     return {
         'schema': 'uncrash.snapshot-preview/v1',
@@ -263,7 +305,10 @@ def extract_preview_metadata(manifest: Dict[str, Any], snapshot_id: Optional[str
         'system_terminal_command': system_terminal_command,
         'launch_script': launch_script,
         'gui_projects': gui_projects,
-        'gui_projects_count': len(gui_projects)
+        'gui_projects_count': len(gui_projects),
+        'recorded_gui_apps': recorded_gui_apps,
+        'recorded_gui_apps_count': len(recorded_gui_apps),
+        'system_gpu': gpu_info
     }
 
 

@@ -42,6 +42,8 @@ def test_mcp_server_tools():
         assert "uncrash_list_workspaces" in tool_names
         assert "uncrash_create_workspace" in tool_names
         assert "uncrash_close_workspace" in tool_names
+        assert "uncrash_get_gpu_status" in tool_names
+        assert "uncrash_get_installed_applications" in tool_names
 
         call_res = await server.call_tool("uncrash_list_gui_apps", {})
         assert len(call_res.content) > 0
@@ -57,6 +59,17 @@ def test_mcp_server_tools():
         assert len(ws_res.content) > 0
         parsed_ws = json.loads(ws_res.content[0].text)
         assert "workspaces" in parsed_ws
+
+        gpu_res = await server.call_tool("uncrash_get_gpu_status", {})
+        assert len(gpu_res.content) > 0
+        parsed_gpu = json.loads(gpu_res.content[0].text)
+        assert "present" in parsed_gpu
+
+        apps_res = await server.call_tool("uncrash_get_installed_applications", {})
+        assert len(apps_res.content) > 0
+        parsed_apps = json.loads(apps_res.content[0].text)
+        assert "categories" in parsed_apps
+        assert "total_installed" in parsed_apps
 
     asyncio.run(run_mcp_checks())
 
@@ -229,6 +242,45 @@ def test_workspace_endpoints(tmp_path, monkeypatch):
     close_pel = client.post(f"/api/v1/workspaces/pelorus-{sid}/close")
     assert close_pel.status_code == 200
     assert close_pel.json()["closed"] is True
+
+
+def test_gpu_and_applications_endpoints():
+    from fastapi.testclient import TestClient
+    app = create_fastapi_app()
+    client = TestClient(app)
+
+    # 1. GPU status endpoint
+    gpu_res = client.get("/api/v1/system/gpu")
+    assert gpu_res.status_code == 200
+    gpu_data = gpu_res.json()
+    assert "present" in gpu_data
+    if gpu_data["present"]:
+        assert "NVIDIA" in gpu_data["name"]
+        assert "driver_version" in gpu_data
+        assert "cuda_version" in gpu_data
+        assert "memory_total_mb" in gpu_data
+        assert gpu_data["memory_total_mb"] > 0
+        assert "tools" in gpu_data
+        assert gpu_data["tools"].get("nvidia-smi") is True
+
+    # 2. Installed applications matrix endpoint
+    apps_res = client.get("/api/v1/system/applications")
+    assert apps_res.status_code == 200
+    apps_data = apps_res.json()
+    assert apps_data["schema"] == "uncrash.application-matrix/v1"
+    assert apps_data["total_installed"] >= 1
+    categories = apps_data["categories"]
+    assert "gpu_hardware" in categories
+    assert "ai_agents" in categories
+    assert "jetbrains" in categories
+    assert "code_terminals" in categories
+    assert "browsers" in categories
+    assert "virtualization" in categories
+
+    # Check that at least some apps have active recovery profiles
+    all_apps = [a for cat in categories.values() for a in cat.get('apps', [])]
+    has_profile_apps = [a for a in all_apps if a.get("has_recovery_profile")]
+    assert len(has_profile_apps) >= 1
 
 
 

@@ -415,15 +415,129 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .btn.accent-btn:hover {
       background: var(--accent-hover);
     }
+    .gpu-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.78rem;
+      background: rgba(166, 227, 161, 0.1);
+      border: 1px solid rgba(166, 227, 161, 0.3);
+      color: var(--green);
+      padding: 4px 12px;
+      border-radius: 20px;
+      cursor: pointer;
+      font-family: var(--font-mono);
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+    .gpu-badge:hover {
+      background: rgba(166, 227, 161, 0.2);
+      border-color: var(--green);
+    }
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px);
+      z-index: 999;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 24px;
+    }
+    .modal-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 1040px;
+      max-width: 95vw;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+      overflow: hidden;
+    }
+    .modal-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .modal-body {
+      padding: 20px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .cat-pill {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      border-radius: 16px;
+      padding: 5px 12px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.15s;
+      user-select: none;
+    }
+    .cat-pill:hover, .cat-pill.active {
+      background: var(--accent);
+      color: #11111b;
+      border-color: var(--accent);
+      font-weight: 700;
+    }
+    .app-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: border-color 0.15s;
+    }
+    .app-card:hover {
+      border-color: var(--accent);
+    }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+    }
+    .metric-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+    }
+    .metric-card .label {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+    .metric-card .val {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--text-main);
+      font-family: var(--font-mono);
+      margin-top: 4px;
+    }
   </style>
 </head>
 <body>
   <header>
-    <div class="logo">
-      <span>🛡️ uncrash</span>
-      <span class="logo-badge">web client</span>
+    <div style="display:flex; align-items:center; gap:16px">
+      <div class="logo">
+        <span>🛡️ uncrash</span>
+        <span class="logo-badge">web client</span>
+      </div>
+      <div id="gpuHeaderBadge" class="gpu-badge" style="display:none" onclick="toggleAppsModal('gpu_hardware')" title="Kliknij, aby otworzyć status GPU i narzędzia NVIDIA">
+        <span id="gpuStatusText">🎮 Ładowanie GPU...</span>
+      </div>
     </div>
     <div class="header-links">
+      <a href="javascript:void(0)" onclick="toggleAppsModal()" style="color:var(--accent); font-weight:600">📱 Zainstalowane Aplikacje (<span id="appsHeaderCount">...</span>)</a>
       <a href="/docs" target="_blank">API Docs</a>
       <a href="/api/v1/registry" target="_blank">Registry</a>
       <a href="/api/v1/workspaces" target="_blank">Workspaces</a>
@@ -458,6 +572,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 
   <div id="toast" class="toast"></div>
+
+  <div id="appsModal" class="modal-overlay" style="display:none" onclick="if(event.target===this) toggleAppsModal()">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div>
+          <h2 style="font-size:1.25rem; font-weight:700; display:flex; align-items:center; gap:8px">
+            <span>📱</span>
+            <span>Zainstalowane Aplikacje PC & Status Odzyskiwania Stanu</span>
+          </h2>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:3px">
+            Wykryto <strong id="modalTotalApps" style="color:var(--text-main)">...</strong> aplikacji systemowych · 
+            <strong id="modalRecoverableApps" style="color:var(--green)">...</strong> skonfigurowanych profili odzyskiwania
+          </div>
+        </div>
+        <button class="btn" onclick="toggleAppsModal()" style="padding:6px 12px; font-size:0.85rem">✕ Zamknij</button>
+      </div>
+      <div class="modal-body">
+        <div id="modalGpuSection" style="margin-bottom:20px; background:var(--bg-card); border:1px solid var(--border); border-radius:10px; padding:16px;">
+        </div>
+        <div id="categoryPills" style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; align-items:center">
+        </div>
+        <div style="margin-bottom:14px">
+          <input type="text" id="appFilterInput" class="search-input" placeholder="🔍 Szukaj aplikacji po nazwie, komendzie lub profilu..." oninput="renderFilteredApps()">
+        </div>
+        <div id="appsGrid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:10px;">
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script>
     let snapshots = [];
@@ -650,6 +793,44 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
         <div class="section-title">Projekty JetBrains & Okna GUI (${gui.length})</div>
         ${guiHtml}
+
+        ${data.system_gpu && data.system_gpu.present ? `
+          <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:10px 14px; margin-top:20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px">
+            <div style="display:flex; align-items:center; gap:8px">
+              <span style="font-size:1.1rem">🎮</span>
+              <span style="font-weight:600; font-size:0.85rem">Akceleracja GPU: ${data.system_gpu.name}</span>
+              <span style="font-size:0.75rem; color:var(--text-muted)">Driver ${data.system_gpu.driver_version} · CUDA ${data.system_gpu.cuda_version}</span>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center">
+              <span class="tag" style="background:rgba(166,227,161,0.15); color:var(--green)">VRAM: ${data.system_gpu.memory_used_mb} / ${data.system_gpu.memory_total_mb} MiB</span>
+              <span class="tag">${data.system_gpu.temperature_c}°C</span>
+              <button class="btn" style="padding:2px 8px; font-size:0.75rem" onclick="toggleAppsModal('gpu_hardware')">Szczegóły GPU ↗</button>
+            </div>
+          </div>
+        ` : ''}
+
+        ${data.recorded_gui_apps && data.recorded_gui_apps.length > 0 ? `
+          <div class="section-title">Zarejestrowane Okna i Aplikacje GUI w Snapshot (${data.recorded_gui_apps.length})</div>
+          <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:8px;">
+            ${data.recorded_gui_apps.map(a => `
+              <div style="background:var(--bg-card); padding:8px 12px; border-radius:6px; border:1px solid var(--border); display:flex; justify-content:space-between; align-items:center">
+                <div>
+                  <div style="font-weight:600; font-size:0.85rem">${a.name}</div>
+                  <div style="font-size:0.72rem; color:var(--text-muted); font-family:var(--font-mono)">PID: ${a.pid} ${a.cmd ? ('· ' + a.cmd) : ''}</div>
+                </div>
+                <span class="tag ${a.has_profile ? 'gui' : ''}">${a.has_profile ? 'Profil ✅' : 'Proces'}</span>
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
+
+        <div style="margin-top:24px; padding:16px; background:var(--bg-card); border-radius:10px; border:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px">
+          <div>
+            <div style="font-weight:700; font-size:0.95rem">📱 Wszystkie Zainstalowane Aplikacje PC (NVIDIA / AI / IDE / Narzędzia)</div>
+            <div style="font-size:0.8rem; color:var(--text-muted)">Przeglądaj macierz aplikacji systemowych i stan ich profili odzyskiwania uncrash</div>
+          </div>
+          <button class="btn primary" onclick="toggleAppsModal()">Otwórz katalog aplikacji PC ↗</button>
+        </div>
       `;
     }
 
@@ -938,23 +1119,252 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       setTimeout(() => toast.classList.remove('show'), 3000);
     }
 
+    let gpuData = null;
+    let applicationsData = null;
+    let currentAppCategory = 'all';
+
+    const categoryMeta = {
+      'all': { label: 'Wszystkie', icon: '📱' },
+      'gpu_hardware': { label: 'NVIDIA & GPU', icon: '🎮' },
+      'ai_agents': { label: 'AI Agenci & IDE', icon: '🤖' },
+      'jetbrains': { label: 'JetBrains IDE', icon: '☕' },
+      'code_terminals': { label: 'Terminale & Edytory', icon: '💻' },
+      'browsers': { label: 'Przeglądarki', icon: '🌐' },
+      'virtualization': { label: 'Wirtualizacja & VM', icon: '📦' },
+      'creative_media': { label: 'Multimedia & 3D', icon: '🎨' },
+      'system_utils': { label: 'Narzędzia Systemowe', icon: '⚙️' }
+    };
+
+    async function fetchGpuAndApps() {
+      try {
+        const [gpuRes, appsRes] = await Promise.all([
+          fetch('/api/v1/system/gpu'),
+          fetch('/api/v1/system/applications')
+        ]);
+        if (gpuRes.ok) gpuData = await gpuRes.json();
+        if (appsRes.ok) applicationsData = await appsRes.json();
+        renderGpuWidget();
+        renderAppsHeader();
+        renderCategoryPills();
+        renderFilteredApps();
+      } catch (err) {
+        console.error('Error fetching GPU or apps:', err);
+      }
+    }
+
+    function renderGpuWidget() {
+      const badge = document.getElementById('gpuHeaderBadge');
+      const text = document.getElementById('gpuStatusText');
+      if (!badge || !text) return;
+      if (gpuData && gpuData.present) {
+        badge.style.display = 'inline-flex';
+        text.textContent = `🎮 ${gpuData.name} · ${gpuData.memory_used_mb}/${gpuData.memory_total_mb} MiB · ${gpuData.temperature_c}°C`;
+      } else {
+        badge.style.display = 'none';
+      }
+      renderGpuSection();
+    }
+
+    function renderGpuSection() {
+      const sec = document.getElementById('modalGpuSection');
+      if (!sec) return;
+      if (!gpuData || !gpuData.present) {
+        sec.innerHTML = '<div style="color:var(--text-muted)">🎮 Brak dedykowanej karty graficznej NVIDIA na hoście.</div>';
+        return;
+      }
+      const tools = gpuData.tools || {};
+      sec.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px">
+          <div style="display:flex; align-items:center; gap:10px">
+            <span style="font-size:1.5rem">🎮</span>
+            <div>
+              <div style="font-weight:700; font-size:1.1rem; color:var(--green)">${gpuData.name}</div>
+              <div style="font-size:0.8rem; color:var(--text-muted)">NVIDIA Driver: <strong>${gpuData.driver_version}</strong> · CUDA: <strong>${gpuData.cuda_version}</strong></div>
+            </div>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap">
+            <span class="tag" style="background:${tools['nvidia-smi'] ? 'rgba(166,227,161,0.2)' : 'rgba(243,139,168,0.2)'}; color:${tools['nvidia-smi'] ? 'var(--green)' : 'var(--red)'}">nvidia-smi ${tools['nvidia-smi'] ? '✓' : '✗'}</span>
+            <span class="tag" style="background:${tools['nvtop'] ? 'rgba(166,227,161,0.2)' : 'rgba(243,139,168,0.2)'}; color:${tools['nvtop'] ? 'var(--green)' : 'var(--red)'}">nvtop ${tools['nvtop'] ? '✓' : '✗'}</span>
+            <span class="tag" style="background:${tools['nvidia-settings'] ? 'rgba(166,227,161,0.2)' : 'rgba(243,139,168,0.2)'}; color:${tools['nvidia-settings'] ? 'var(--green)' : 'var(--red)'}">nvidia-settings ${tools['nvidia-settings'] ? '✓' : '✗'}</span>
+          </div>
+        </div>
+        <div class="metric-grid">
+          <div class="metric-card">
+            <div class="label">VRAM Pamięć</div>
+            <div class="val">${gpuData.memory_used_mb} <span style="font-size:0.8rem; font-weight:400; color:var(--text-muted)">/ ${gpuData.memory_total_mb} MiB</span></div>
+          </div>
+          <div class="metric-card">
+            <div class="label">Obciążenie GPU</div>
+            <div class="val">${gpuData.gpu_utilization_pct}%</div>
+          </div>
+          <div class="metric-card">
+            <div class="label">Temperatura</div>
+            <div class="val">${gpuData.temperature_c}°C</div>
+          </div>
+          <div class="metric-card">
+            <div class="label">Compute Cache (~/.nv)</div>
+            <div class="val" style="color:var(--green); font-size:0.95rem">✅ Aktywny profil</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderAppsHeader() {
+      if (!applicationsData) return;
+      const countEl = document.getElementById('appsHeaderCount');
+      if (countEl) countEl.textContent = applicationsData.total_installed;
+      const modalTotal = document.getElementById('modalTotalApps');
+      if (modalTotal) modalTotal.textContent = applicationsData.total_installed;
+
+      let recoverable = 0;
+      for (const catObj of Object.values(applicationsData.categories || {})) {
+        const apps = catObj.apps || (Array.isArray(catObj) ? catObj : []);
+        recoverable += apps.filter(a => a.has_recovery_profile).length;
+      }
+      const modalRec = document.getElementById('modalRecoverableApps');
+      if (modalRec) modalRec.textContent = recoverable;
+    }
+
+    function renderCategoryPills() {
+      const pillsContainer = document.getElementById('categoryPills');
+      if (!pillsContainer || !applicationsData) return;
+
+      const keys = ['all', 'gpu_hardware', 'ai_agents', 'jetbrains', 'code_terminals', 'browsers', 'virtualization', 'creative_media', 'system_utils'];
+      pillsContainer.innerHTML = keys.map(k => {
+        const meta = categoryMeta[k] || { label: k, icon: '📦' };
+        let count = 0;
+        if (k === 'all') {
+          count = applicationsData.total_installed;
+        } else {
+          const catObj = applicationsData.categories && applicationsData.categories[k];
+          count = catObj ? (catObj.apps ? catObj.apps.length : (Array.isArray(catObj) ? catObj.length : 0)) : 0;
+        }
+        const active = currentAppCategory === k ? 'active' : '';
+        return `
+          <div class="cat-pill ${active}" onclick="selectAppCategory('${k}')">
+            <span>${meta.icon} ${meta.label}</span>
+            <span style="opacity:0.75; font-size:0.75rem; margin-left:4px">(${count})</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function selectAppCategory(cat) {
+      currentAppCategory = cat;
+      renderCategoryPills();
+      renderFilteredApps();
+      updateUrl({ cat: cat === 'all' ? null : cat });
+    }
+
+    function renderFilteredApps() {
+      const grid = document.getElementById('appsGrid');
+      if (!grid || !applicationsData) return;
+      const filterText = (document.getElementById('appFilterInput')?.value || '').toLowerCase().trim();
+
+      let list = [];
+      if (currentAppCategory === 'all') {
+        for (const catObj of Object.values(applicationsData.categories || {})) {
+          const apps = catObj.apps || (Array.isArray(catObj) ? catObj : []);
+          list.push(...apps);
+        }
+      } else {
+        const catObj = applicationsData.categories && applicationsData.categories[currentAppCategory];
+        list = catObj ? (catObj.apps ? catObj.apps : (Array.isArray(catObj) ? catObj : [])) : [];
+      }
+
+      if (filterText) {
+        list = list.filter(a =>
+          (a.name && a.name.toLowerCase().includes(filterText)) ||
+          (a.cmd && a.cmd.toLowerCase().includes(filterText)) ||
+          (a.profile_id && a.profile_id.toLowerCase().includes(filterText))
+        );
+      }
+
+      if (list.length === 0) {
+        grid.innerHTML = '<div style="grid-column: 1 / -1; padding:32px; text-align:center; color:var(--text-muted)">Brak pasujących aplikacji w tej kategorii.</div>';
+        return;
+      }
+
+      grid.innerHTML = list.map(app => {
+        const meta = categoryMeta[app.category] || { icon: '📦', label: app.category };
+        const hasProfile = app.has_recovery_profile;
+        const profileBadge = hasProfile
+          ? `<span class="tag" style="background:rgba(166,227,161,0.2); color:var(--green); font-weight:700">✅ Profil: ${app.profile_id}</span>`
+          : `<span class="tag" style="background:rgba(166,173,200,0.12); color:var(--text-muted)">ℹ️ Systemowa</span>`;
+
+        return `
+          <div class="app-card">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px">
+              <div>
+                <div style="font-weight:700; font-size:0.92rem; display:flex; align-items:center; gap:6px">
+                  <span>${meta.icon}</span>
+                  <span>${app.name}</span>
+                </div>
+                <div style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; font-weight:600; margin-top:2px">${meta.label}</div>
+              </div>
+              <div>${profileBadge}</div>
+            </div>
+            <div style="font-family:var(--font-mono); font-size:0.75rem; color:var(--yellow); background:#181825; padding:4px 8px; border-radius:4px; border:1px solid #313244; word-break:break-all">
+              ${app.cmd || 'brak polecenia cli'}
+            </div>
+            ${app.desktop_file ? `<div style="font-size:0.7rem; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title="${app.desktop_file}">📄 ${app.desktop_file}</div>` : ''}
+          </div>
+        `;
+      }).join('');
+    }
+
+    function toggleAppsModal(category = null) {
+      const modal = document.getElementById('appsModal');
+      if (!modal) return;
+      if (modal.style.display === 'none' || modal.style.display === '') {
+        if (category) {
+          selectAppCategory(category);
+        }
+        modal.style.display = 'flex';
+        updateUrl({ modal: 'apps', cat: currentAppCategory === 'all' ? null : currentAppCategory });
+      } else {
+        modal.style.display = 'none';
+        updateUrl({ modal: null, cat: null });
+      }
+    }
+
     window.addEventListener('popstate', () => {
       const urlParams = new URLSearchParams(window.location.search);
       const snap = urlParams.get('snapshot');
       const action = urlParams.get('action');
       const ws = urlParams.get('workspace');
+      const modal = urlParams.get('modal');
+      const cat = urlParams.get('cat');
       if (snap && snap !== currentSnapshotId) {
         selectSnapshot(snap, action);
       } else if (action === 'workspace' && ws && ws !== currentWorkspaceId) {
         selectWorkspace(ws);
       }
+      if (modal === 'apps') {
+        const modalEl = document.getElementById('appsModal');
+        if (modalEl) modalEl.style.display = 'flex';
+        if (cat) selectAppCategory(cat);
+      } else {
+        const modalEl = document.getElementById('appsModal');
+        if (modalEl) modalEl.style.display = 'none';
+      }
     });
 
-    window.addEventListener('DOMContentLoaded', async () => {
-      await loadSnapshots();
-      await fetchWorkspaces();
+    async function init() {
+      await Promise.all([loadSnapshots(), fetchWorkspaces(), fetchGpuAndApps()]);
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('modal') === 'apps') {
+        toggleAppsModal(urlParams.get('cat'));
+      }
       setInterval(fetchWorkspaces, 15000);
-    });
+      setInterval(fetchGpuAndApps, 30000);
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
   </script>
 </body>
 </html>
