@@ -1,0 +1,122 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-009",
+  "summary": "Deliver APX recovery application for Willmux and Minis",
+  "workstream": "application",
+  "classification": {
+    "kind": "FEATURE",
+    "priority": "P2",
+    "origin": "requested"
+  },
+  "allowedPaths": [
+    "project/ticket-009/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "app/uncrash-recovery/**"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "12dc61bb41db4454fd5b056b600223dcbe60580e",
+    "targetBranch": "main",
+    "outcome": "Tested local APX recovery panel composing existing Uncrash, separate noVNC sessions and an explicitly confirmed exact-bundle Minis transfer; local commit and running loopback preview.",
+    "nonGoals": [
+      "Edit ticket-007 engines or take over its lease",
+      "Change Willmux or Fixos repositories",
+      "Publish Git branches or deploy production",
+      "Import or launch applications remotely without a separate accepted intent"
+    ],
+    "complexity": "M",
+    "estimatedMinutes": 60,
+    "budgets": {
+      "maxImplementationFiles": 9,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 2,
+      "maxRuntimeDependencies": 1
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Own only a stdlib HTTP adapter and browser panel under api/apx; delegate snapshot, transfer and logging engines to the selected existing Uncrash installation.",
+      "components": [
+        {
+          "name": "apx-recovery",
+          "paths": [
+            "app/uncrash-recovery/**"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [
+        "Loopback APX recovery API with registry, health, sessions, backend, transfer plan and transfer apply",
+        "Browser session selection and explicit transfer confirmation"
+      ],
+      "dataChanges": [
+        {
+          "kind": "component-local-state",
+          "component": "apx-recovery",
+          "description": "Private configured inventory and bundle; ephemeral single-use plans, local PID, logs and exact transfer receipts."
+        }
+      ],
+      "ui": {
+        "impact": "multi-state",
+        "states": [
+          "loading",
+          "empty",
+          "error",
+          "success"
+        ],
+        "evidence": [
+          "Browser screenshots and assertions stored outside source in the local audit receipt directory."
+        ]
+      },
+      "rollback": "Stop the adapter process and revert its material commit; preserve recovery bundles, receipts and existing backend sessions."
+    },
+    "runtimeDependencies": [
+      "Existing installed Uncrash CLI and event logger"
+    ],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "python <local-apx-standard>/src/apx_check.py app/uncrash-recovery --json"
+        ],
+        "evidence": "Static APX check succeeds; signed Willman receipts explicitly remain unsupported."
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "Browser verification against http://127.0.0.1:18893/"
+        ],
+        "evidence": "Three session cards, distinct noVNC links and selected session URL verified."
+      },
+      {
+        "criterion": "AC-03",
+        "commands": [
+          "python -m unittest discover -s app/uncrash-recovery/tests -v"
+        ],
+        "evidence": "Tests bind hash, target, expiry, single use, private file, concurrent dispatch and exact receiver receipt; no SSH test effect."
+      },
+      {
+        "criterion": "AC-04",
+        "commands": [
+          "Browser verification of Snapshoty iframe and queued Fixos integration"
+        ],
+        "evidence": "Configured Uncrash backend embedded and Fixos/catalog work preserved in PLF-004."
+      },
+      {
+        "criterion": "AC-05",
+        "commands": [
+          "./project/governance-check.sh",
+          "git diff --check",
+          "Browser verification of prepare and cancel only"
+        ],
+        "evidence": "Governance, security tests and browser assertions pass before local commit."
+      }
+    ]
+  }
+}
