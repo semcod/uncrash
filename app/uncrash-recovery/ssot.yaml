@@ -1,0 +1,12 @@
+{
+  "schema": "wellmanifest.ssot/v1",
+  "app_id": "uncrash-recovery",
+  "network": {"default_port": 18893, "bind": "127.0.0.1"},
+  "backend": "http://127.0.0.1:18891/",
+  "endpoints": {
+    "health": "/health", "registry": "/api/registry", "sessions": "/api/sessions",
+    "backend": "/api/backend", "transfer_plan": "/api/transfer/plan",
+    "transfer_apply": "/api/transfer/apply"
+  },
+  "governance": {"owner": "semcod/uncrash", "standard": "urn:wellmanifest:spec:apx:v1"}
+}

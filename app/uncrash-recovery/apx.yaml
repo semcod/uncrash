@@ -1,0 +1,17 @@
+{
+  "schema": "urn:willapx:manifest:v1",
+  "name": "uncrash-recovery",
+  "title": "Odzyskiwanie sesji",
+  "version": "0.1.0",
+  "type": "web",
+  "entrypoint": "server.py",
+  "default_port": 18893,
+  "resources": ["~/.local/state/uncrash-apx"],
+  "permissions": ["fs:read", "fs:write", "net:local", "net:external"],
+  "willmux": {"default_window": "B", "bezel": 0, "palette_cmd": "uncrash", "title": "Odzyskiwanie sesji"},
+  "actions": {
+    "sessions": {"title": "Zapisane sesje", "description": "Lista zarejestrowanych sesji i dostępność ich podglądów", "confirm": false},
+    "transfer-plan": {"title": "Przygotuj przeniesienie", "description": "Sprawdź plik, hash i skonfigurowany cel SSH", "confirm": false},
+    "transfer-apply": {"title": "Przenieś na minis", "description": "Wyślij potwierdzony pakiet jednokrotnie i zapisz wynik weryfikacji", "confirm": true}
+  }
+}

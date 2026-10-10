@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pl">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Uncrash · Odzyskiwanie sesji</title>
+<style>
+  :root{color-scheme:dark;--bg:#101725;--panel:#182236;--text:#eef3fc;--muted:#a3b3cb;--line:#30415c;--accent:#a9c9ff}
+  :root[data-theme=light]{color-scheme:light;--bg:#eef3f9;--panel:#fff;--text:#15213a;--muted:#51637e;--line:#ccd8e9;--accent:#244b8c}
+  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,sans-serif}
+  header,main,footer{max-width:1260px;margin:auto;padding:24px}header{display:flex;align-items:center;gap:18px;border-bottom:1px solid var(--line)}
+  h1{font-size:24px;margin:0}h2{font-size:21px;margin:0}p{color:var(--muted)}button,a{font:inherit}button,.link{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px 16px;cursor:pointer;text-decoration:none}
+  button:hover,.link:hover{border-color:var(--accent)}button:focus-visible,a:focus-visible{outline:3px solid var(--accent);outline-offset:3px}button:disabled{opacity:.5;cursor:default}
+  button[aria-selected=true]{border-color:var(--accent);color:var(--accent)}nav{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:24px}
+  .item-section-toolbar{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:20px}.section-view-toolbar{display:flex;gap:10px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}.card{border:1px solid var(--line);border-radius:12px;padding:20px;background:var(--panel)}.card h3{margin:0 0 10px}.card p{margin:6px 0}.card-actions{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap}
+  .badge{font-size:13px;color:var(--accent)}.notice{padding:16px 20px;border-left:3px solid var(--accent);background:var(--panel);margin:20px 0}iframe{width:100%;height:720px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+  .hash{font:13px/1.6 ui-monospace,monospace;overflow-wrap:anywhere;color:var(--text)}dl{display:grid;grid-template-columns:110px 1fr;gap:10px}dt{color:var(--muted)}dd{margin:0}.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+  [hidden]{display:none!important}#message{min-height:30px;color:var(--accent)}footer{color:var(--muted);font-size:13px}.spacer{flex:1}
+  @media(max-width:650px){header,main,footer{padding:16px}.item-section-toolbar{align-items:flex-start;flex-direction:column}h1{font-size:20px}iframe{height:600px}}
+</style>
+<header><div><span class="badge">UNCRASH</span><h1>Odzyskiwanie sesji</h1></div><span class="spacer"></span><button id="theme" aria-label="Zmień motyw">Motyw</button></header>
+<main>
+  <nav aria-label="Widoki odzyskiwania"><button data-tab="sessions">Sesje</button><button data-tab="backend">Snapshoty</button><button data-tab="transfer">Przeniesienie na minis</button></nav>
+  <p id="message" role="status" aria-live="polite"></p>
+  <section id="sessions">
+    <div class="item-section-toolbar"><h2 class="panel-section-title">Odzyskane rozmowy</h2><div class="section-view-toolbar"><button id="refresh">Odśwież</button></div></div>
+    <p>Każda rozmowa ma osobny pulpit. Możesz obejrzeć ją tutaj lub otworzyć w oddzielnym oknie.</p>
+    <div id="cards" class="cards"></div>
+    <div id="sessionView" hidden><div class="item-section-toolbar" style="margin-top:28px"><h2 id="sessionTitle" class="panel-section-title"></h2><a id="sessionLink" class="link" target="_blank" rel="noopener noreferrer">Otwórz osobne okno ↗</a></div><iframe id="sessionFrame" title="Odzyskana rozmowa" allow="clipboard-read; clipboard-write"></iframe></div>
+    <div class="notice">Widoczna historia pochodzi z zapisanej rozmowy. Odzyskanie RAM i starego terminala zależy od rodzaju kopii. Uruchomione sesje mogą mieć ograniczony czas działania.</div>
+  </section>
+  <section id="backend" hidden><div class="item-section-toolbar"><h2 class="panel-section-title">Snapshoty i podgląd aplikacji</h2><a id="backendLink" class="link" target="_blank" rel="noopener noreferrer">Otwórz panel ↗</a></div><iframe id="backendFrame" title="Panel snapshotów Uncrash"></iframe><p>Jeśli panel jest niedostępny, uruchom skonfigurowaną usługę Uncrash.</p></section>
+  <section id="transfer" hidden><div class="item-section-toolbar"><h2 class="panel-section-title">Przenieś zapisane sesje</h2></div><p>Najpierw sprawdzimy przygotowany pakiet i cel. Wysłanie pliku wymaga osobnego potwierdzenia.</p><button id="prepare">Przygotuj przeniesienie</button>
+    <article id="decision" class="card" hidden style="margin-top:20px"><h3>Potwierdź wysłanie pakietu</h3><dl><dt>Pakiet</dt><dd id="bundleName"></dd><dt>Cel</dt><dd id="bundleHost"></dd><dt>Rozmiar</dt><dd id="bundleSize"></dd><dt>SHA-256</dt><dd id="bundleHash" class="hash"></dd></dl><p>Pakiet może zawierać prywatne rozmowy. Potwierdzenie jest ważne przez dwie minuty. Po transferze plik trafi do prywatnej skrzynki odbiorczej; aplikacje na minis nie uruchomią się automatycznie.</p><div class="card-actions"><button id="confirm" class="primary">Potwierdzam — wyślij na minis</button><button id="cancel">Anuluj</button></div></article>
+  </section>
+</main><footer>Uncrash · Sesje / Podgląd / Przeniesienie</footer>
+<script>
+  const $=id=>document.getElementById(id);let rows=[],plan=null;
+  function state(values){const u=new URL(location.href);for(const[k,v]of Object.entries(values)){if(v===null)u.searchParams.delete(k);else u.searchParams.set(k,v)}history.replaceState(null,'',u);render()}
+  function message(text){$('message').textContent=text}
+  async function api(path,body){const r=await fetch(path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw Error(data.error||'Nie udało się wykonać operacji');return data}
+  function render(){const p=new URLSearchParams(location.search);let tab=p.get('tab')||'sessions';if(!['sessions','backend','transfer'].includes(tab))tab='sessions';for(const id of ['sessions','backend','transfer'])$(id).hidden=id!==tab;for(const b of document.querySelectorAll('[data-tab]'))b.setAttribute('aria-selected',String(b.dataset.tab===tab));document.documentElement.dataset.theme=p.get('theme')==='light'?'light':'dark';const row=rows.find(r=>r.id===p.get('session'));$('sessionView').hidden=!row;if(row){$('sessionTitle').textContent=row.name;$('sessionLink').href=row.url;if($('sessionFrame').getAttribute('src')!==row.url)$('sessionFrame').src=row.url}else $('sessionFrame').removeAttribute('src')}
+  async function refresh(){try{rows=(await api('/api/sessions')).sessions;const cards=$('cards');cards.replaceChildren();if(!rows.length){const p=document.createElement('p');p.textContent='Nie zarejestrowano jeszcze odzyskanych sesji.';cards.append(p)}for(const row of rows){const card=document.createElement('article');card.className='card';const h=document.createElement('h3');h.textContent=row.name;const badge=document.createElement('span');badge.className='badge';badge.textContent=row.status==='active'?'Pulpit dostępny':'Pulpit zatrzymany';const mode=document.createElement('p');mode.textContent=row.mode==='plan'?'Tryb planowania':'Tryb: '+row.mode;const actions=document.createElement('div');actions.className='card-actions';const b=document.createElement('button');b.textContent='Podgląd';b.disabled=row.status!=='active';b.onclick=()=>state({tab:'sessions',session:row.id});const a=document.createElement('a');a.className='link';a.textContent='Osobne okno ↗';a.target='_blank';a.rel='noopener noreferrer';a.href=row.url;actions.append(b,a);card.append(h,badge,mode,actions);cards.append(card)}render()}catch(e){message(e.message)}}
+  for(const b of document.querySelectorAll('[data-tab]'))b.onclick=()=>state({tab:b.dataset.tab});$('theme').onclick=()=>state({theme:document.documentElement.dataset.theme==='light'?'dark':'light'});$('refresh').onclick=refresh;window.addEventListener('popstate',render);
+  $('prepare').onclick=async()=>{plan=null;$('decision').hidden=true;$('prepare').disabled=true;message('Sprawdzanie pakietu…');try{plan=await api('/api/transfer/plan',{});$('bundleName').textContent=plan.name;$('bundleHost').textContent=plan.host;$('bundleSize').textContent=(plan.bytes/1000000).toFixed(2)+' MB';$('bundleHash').textContent=plan.sha256;$('confirm').disabled=false;$('decision').hidden=false;message('Pakiet sprawdzony. Jeszcze nic nie wysłano.')}catch(e){message(e.message)}finally{$('prepare').disabled=false}};
+  $('cancel').onclick=()=>{plan=null;$('decision').hidden=true;message('Przeniesienie anulowane. Nic nie wysłano.')};$('confirm').onclick=async()=>{if(!plan)return;const token=plan.token;plan=null;$('confirm').disabled=true;message('Wysyłanie i weryfikacja pakietu…');try{const r=await api('/api/transfer/apply',{token});$('decision').hidden=true;message('Pakiet zweryfikowany i dostarczony do '+r.host+'. Aplikacje nie zostały uruchomione.')}catch(e){$('decision').hidden=true;message(e.message)}};
+  api('/api/backend').then(r=>{$('backendFrame').src=r.url;$('backendLink').href=r.url}).catch(e=>message(e.message));render();refresh();
+</script>
+</html>
