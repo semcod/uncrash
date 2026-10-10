@@ -89,6 +89,14 @@ OPERATIONS_REGISTRY = [
         "parameters": {}
     },
     {
+        "id": "uncrash.virtualization.engines",
+        "name": "list_virtualization_engines",
+        "description": "List all supported virtualization and workspace engines (Twinerd, Kasm, CloneBox VM, CloneBox Container, Pelorus Twin).",
+        "protocols": ["cli", "rest", "mcp"],
+        "schema": "uncrash.virtualization-engines/v1",
+        "parameters": {}
+    },
+    {
         "id": "uncrash.workspaces.create",
         "name": "create_snapshot_workspace",
         "description": "Launch a dedicated noVNC workspace running all recorded terminal tabs for a specific snapshot.",
@@ -97,7 +105,8 @@ OPERATIONS_REGISTRY = [
         "parameters": {
             "snapshot_id": {"type": "string", "description": "Snapshot ID to restore/preview in workspace"},
             "workspace_id": {"type": "string", "description": "Optional custom workspace identifier", "required": False},
-            "force_new": {"type": "boolean", "description": "Force creating a new workspace rather than reusing existing", "default": False}
+            "force_new": {"type": "boolean", "description": "Force creating a new workspace rather than reusing existing", "default": False},
+            "engine": {"type": "string", "description": "Virtualization engine: 'native' (Twinerd/TigerVNC), 'kasm' (twinerd-kasm), 'clonebox' (CloneBox VM), 'clonebox-container' (CloneBox Container), or 'pelorus' (Pelorus Twin)", "default": "native"}
         }
     },
     {
@@ -257,6 +266,12 @@ def create_fastapi_app(store=None, config=None):
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
+    @app.get("/api/v1/virtualization/engines")
+    def get_virtualization_engines_list():
+        from .preview import get_virtualization_engines
+        engines = get_virtualization_engines()
+        return {"schema": "uncrash.virtualization-engines/v1", "count": len(engines), "engines": engines}
+
     @app.get("/api/v1/workspaces")
     def get_workspaces():
         from .preview import workspace_manager
@@ -290,6 +305,7 @@ def create_fastapi_app(store=None, config=None):
                               workspace_id: Optional[str] = None,
                               name: Optional[str] = None,
                               force_new: bool = False,
+                              engine: str = "native",
                               port: Optional[int] = None):
         from .preview import extract_preview_metadata, workspace_manager
         try:
@@ -301,6 +317,8 @@ def create_fastapi_app(store=None, config=None):
                 workspace_id=workspace_id,
                 name=name,
                 force_new=force_new,
+                engine=engine,
+                manifest=manifest,
                 port=port
             )
             return ws.to_dict()
@@ -442,6 +460,14 @@ def create_mcp_server(store=None, config=None):
         return json.dumps(res, ensure_ascii=False, indent=2)
 
     @mcp.tool(
+        name="uncrash_list_virtualization_engines",
+        description="List all available virtualization and workspace engines (Twinerd, Kasm, CloneBox VM, CloneBox Container, Pelorus Twin)."
+    )
+    def mcp_list_virtualization_engines() -> str:
+        from .preview import get_virtualization_engines
+        return json.dumps(get_virtualization_engines(), ensure_ascii=False, indent=2)
+
+    @mcp.tool(
         name="uncrash_list_workspaces",
         description="List active isolated noVNC virtual desktop workspaces running snapshot sessions via Twinerd."
     )
@@ -454,7 +480,7 @@ def create_mcp_server(store=None, config=None):
         name="uncrash_create_workspace",
         description="Launch a dedicated noVNC workspace running all recorded terminal tabs for a specific snapshot."
     )
-    def mcp_create_workspace(snapshot_id: str = "latest", workspace_id: Optional[str] = None, force_new: bool = False) -> str:
+    def mcp_create_workspace(snapshot_id: str = "latest", workspace_id: Optional[str] = None, force_new: bool = False, engine: str = "native") -> str:
         from .preview import extract_preview_metadata, workspace_manager
         _, _, _, manifest = resolved_store.load(snapshot_id)
         meta = extract_preview_metadata(manifest, snapshot_id)
@@ -462,7 +488,9 @@ def create_mcp_server(store=None, config=None):
             snapshot_id=snapshot_id,
             terminal_tabs=meta["terminal_tabs"],
             workspace_id=workspace_id,
-            force_new=force_new
+            force_new=force_new,
+            engine=engine,
+            manifest=manifest
         )
         return json.dumps(ws.to_dict(), ensure_ascii=False, indent=2)
 

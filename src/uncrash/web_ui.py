@@ -223,6 +223,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       color: #11111b;
       border-color: var(--green);
     }
+    .btn-native { background: rgba(137, 180, 250, 0.12); border-color: #89b4fa; color: #89b4fa; }
+    .btn-native:hover { background: #89b4fa; color: #11111b; }
+    .btn-kasm { background: rgba(203, 166, 247, 0.12); border-color: #cba6f7; color: #cba6f7; }
+    .btn-kasm:hover { background: #cba6f7; color: #11111b; }
+    .btn-clonebox { background: rgba(250, 179, 135, 0.12); border-color: #fab387; color: #fab387; }
+    .btn-clonebox:hover { background: #fab387; color: #11111b; }
+    .btn-clonebox-cnt { background: rgba(148, 226, 213, 0.12); border-color: #94e2d5; color: #94e2d5; }
+    .btn-clonebox-cnt:hover { background: #94e2d5; color: #11111b; }
+    .btn-pelorus { background: rgba(166, 227, 161, 0.12); border-color: #a6e3a1; color: #a6e3a1; }
+    .btn-pelorus:hover { background: #a6e3a1; color: #11111b; }
     .section-title {
       font-size: 1.125rem;
       font-weight: 600;
@@ -553,10 +563,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           launchTabs(id);
         } else if (autoAction === 'workspace') {
           const wsParam = new URLSearchParams(window.location.search).get('workspace');
+          const engineParam = new URLSearchParams(window.location.search).get('engine') || 'native';
           if (wsParam) {
             selectWorkspace(wsParam);
           } else {
-            launchWorkspace(id, false);
+            launchWorkspace(id, false, engineParam);
           }
         }
       } catch (err) {
@@ -614,8 +625,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <button class="btn primary" onclick="launchNovnc('${data.snapshot}')">🖥️ Podgląd noVNC</button>
             <button class="btn" onclick="captureScreenshot('${data.snapshot}')">📸 Zrzut ekranu</button>
             <button class="btn success" onclick="launchTabs('${data.snapshot}')">💻 Uruchom taby w terminalu</button>
-            <button class="btn accent-btn" onclick="launchWorkspace('${data.snapshot}')">🌐 Uruchom w noVNC (Workspace)</button>
-            <button class="btn" onclick="launchWorkspace('${data.snapshot}', true)" title="Uruchom kolejny niezależny workspace noVNC dla tej sesji">+ Nowy Workspace</button>
+            <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; background:var(--bg-surface); padding:4px 8px; border-radius:8px; border:1px solid var(--border)">
+              <span style="font-size:0.75rem; color:var(--text-muted); font-weight:700; margin-right:2px">WIRTUALIZACJA:</span>
+              <button class="btn btn-native" onclick="launchWorkspace('${data.snapshot}', false, 'native')" title="Natywny wirtualny pulpit X11 na hoście przez Twinerd">🖥️ Natywny</button>
+              <button class="btn btn-kasm" onclick="launchWorkspace('${data.snapshot}', false, 'kasm')" title="Izolowany Kasm Workspace ze stagingiem plików przez twinerd-kasm">📦 Kasm</button>
+              <button class="btn btn-clonebox" onclick="launchWorkspace('${data.snapshot}', false, 'clonebox')" title="Wirtualizacja KVM/QEMU maszyn z projektu clonebox (wronai/clonebox)">🎛️ CloneBox VM</button>
+              <button class="btn btn-clonebox-cnt" onclick="launchWorkspace('${data.snapshot}', false, 'clonebox-container')" title="Lekka konteneryzacja za pośrednictwem clonebox.container (Docker/Podman)">🐳 CloneBox Cnt</button>
+              <button class="btn btn-pelorus" onclick="launchWorkspace('${data.snapshot}', false, 'pelorus')" title="Cyfrowy bliźniak i arbiter sesji twinerd-pelorus">🧭 Pelorus</button>
+              <button class="btn" onclick="promptNewWorkspace('${data.snapshot}')" title="Uruchom kolejną instancję wybranego silnika dla tej sesji">+ Nowy</button>
+            </div>
           </div>
         </div>
 
@@ -663,23 +681,43 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       chips.innerHTML = activeWorkspaces.map(ws => {
         const isActive = ws.workspace_id === currentWorkspaceId;
         const shortName = ws.name || ws.workspace_id;
+        let icon = '●';
+        let badge = '🖥️ Natywny';
+        let color = '#89b4fa';
+        if (ws.engine === 'kasm' || ws.workspace_id.startsWith('kasm-')) {
+          icon = '📦'; badge = '📦 Kasm'; color = '#cba6f7';
+        } else if (ws.engine === 'clonebox' || ws.workspace_id.startsWith('cb-')) {
+          icon = '🎛️'; badge = '🎛️ CloneBox VM'; color = '#fab387';
+        } else if (ws.engine === 'clonebox-container' || ws.workspace_id.startsWith('cbc-')) {
+          icon = '🐳'; badge = '🐳 CloneBox Cnt'; color = '#94e2d5';
+        } else if (ws.engine === 'pelorus' || ws.workspace_id.startsWith('pelorus-')) {
+          icon = '🧭'; badge = '🧭 Pelorus'; color = '#a6e3a1';
+        }
         const tabsInfo = ws.tabs_count > 0 ? `${ws.tabs_count} tab(ów)` : (ws.display || '');
         return `
-          <div class="workspace-chip ${isActive ? 'active' : ''}" onclick="selectWorkspace('${ws.workspace_id}')">
-            <span>●</span>
-            <span><strong>${shortName}</strong> (${tabsInfo})</span>
+          <div class="workspace-chip ${isActive ? 'active' : ''}" style="border-left: 3px solid ${color}" onclick="selectWorkspace('${ws.workspace_id}')">
+            <span>${icon}</span>
+            <span><strong>${shortName}</strong> [${badge}] (${tabsInfo})</span>
             <span class="chip-close" onclick="event.stopPropagation(); closeWorkspace('${ws.workspace_id}')" title="Zamknij workspace">✕</span>
           </div>
         `;
       }).join('');
     }
 
-    async function launchWorkspace(snapshotId, forceNew = false) {
-      updateUrl({ snapshot: snapshotId, action: 'workspace' });
+    async function launchWorkspace(snapshotId, forceNew = false, engine = 'native') {
+      updateUrl({ snapshot: snapshotId, action: 'workspace', engine: engine });
       const area = document.getElementById('previewArea');
-      area.innerHTML = '<div style="padding:16px; background:var(--bg-card); border-radius:8px">Tworzenie i uruchamianie dedykowanego workspace noVNC dla sesji...</div>';
+      const engineLabels = {
+        'native': 'Natywny Workspace (Twinerd / TigerVNC)',
+        'kasm': 'Kasm Workspace (twinerd-kasm)',
+        'clonebox': 'CloneBox VM (wronai/clonebox)',
+        'clonebox-container': 'CloneBox Container (Docker/Podman)',
+        'pelorus': 'Pelorus Digital Twin (twinerd-pelorus)'
+      };
+      const label = engineLabels[engine] || engine;
+      area.innerHTML = `<div style="padding:16px; background:var(--bg-card); border-radius:8px">Inicjalizacja i uruchamianie silnika wirtualizacji: <strong>${label}</strong>...</div>`;
       try {
-        const url = `/api/v1/snapshots/${snapshotId}/workspace${forceNew ? '?force_new=true' : ''}`;
+        const url = `/api/v1/snapshots/${snapshotId}/workspace?force_new=${forceNew}&engine=${engine}`;
         const res = await fetch(url, { method: 'POST' });
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
@@ -687,13 +725,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         }
         const ws = await res.json();
         currentWorkspaceId = ws.workspace_id;
-        updateUrl({ snapshot: snapshotId, action: 'workspace', workspace: ws.workspace_id });
+        updateUrl({ snapshot: snapshotId, action: 'workspace', workspace: ws.workspace_id, engine: ws.engine });
         renderWorkspacePreview(ws);
         await fetchWorkspaces();
-        showToast(`Workspace '${ws.workspace_id}' został uruchomiony!`);
+        showToast(`Workspace '${ws.workspace_id}' [${(ws.engine || engine).toUpperCase()}] został uruchomiony!`);
       } catch (err) {
-        area.innerHTML = `<div style="padding:16px; color:var(--red)">Błąd uruchamiania workspace noVNC: ${err.message}</div>`;
+        area.innerHTML = `<div style="padding:16px; color:var(--red)">Błąd uruchamiania workspace noVNC (${engine}): ${err.message}</div>`;
       }
+    }
+
+    function promptNewWorkspace(snapshotId) {
+      const choice = prompt('Wybierz silnik (1: native, 2: kasm, 3: clonebox, 4: clonebox-container, 5: pelorus):', '1');
+      if (!choice) return;
+      const map = {
+        '1': 'native', 'native': 'native',
+        '2': 'kasm', 'kasm': 'kasm',
+        '3': 'clonebox', 'clonebox': 'clonebox',
+        '4': 'clonebox-container', 'clonebox-container': 'clonebox-container',
+        '5': 'pelorus', 'pelorus': 'pelorus'
+      };
+      const eng = map[choice.trim().toLowerCase()] || 'native';
+      launchWorkspace(snapshotId, true, eng);
     }
 
     async function selectWorkspace(workspaceId) {
@@ -725,13 +777,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       renderWorkspacesBar();
       const area = document.getElementById('previewArea');
       const tabsCount = ws.tabs_count || (ws.terminal_tabs ? ws.terminal_tabs.length : 0);
+      let engineBadge = '<span class="tag" style="background:rgba(137,180,250,0.25); color:var(--accent); font-weight:700">🖥️ NATYWNY TWINERD</span>';
+      if (ws.engine === 'kasm' || ws.workspace_id.startsWith('kasm-')) {
+        engineBadge = '<span class="tag" style="background:rgba(203,166,247,0.25); color:#cba6f7; font-weight:700">📦 KASM WORKSPACE (twinerd-kasm)</span>';
+      } else if (ws.engine === 'clonebox' || ws.workspace_id.startsWith('cb-')) {
+        engineBadge = '<span class="tag" style="background:rgba(250,179,135,0.25); color:#fab387; font-weight:700">🎛️ CLONEBOX VM (wronai/clonebox)</span>';
+      } else if (ws.engine === 'clonebox-container' || ws.workspace_id.startsWith('cbc-')) {
+        engineBadge = '<span class="tag" style="background:rgba(148,226,213,0.25); color:#94e2d5; font-weight:700">🐳 CLONEBOX CONTAINER (Docker/Podman)</span>';
+      } else if (ws.engine === 'pelorus' || ws.workspace_id.startsWith('pelorus-')) {
+        engineBadge = '<span class="tag" style="background:rgba(166,227,161,0.25); color:#a6e3a1; font-weight:700">🧭 PELORUS TWIN (twinerd-pelorus)</span>';
+      }
+      const stagingInfo = ws.workspace_dir
+        ? `<span style="font-size:0.75rem; color:var(--text-muted)">Staging: <code>${ws.workspace_dir}</code> (${ws.staged_files_count || 0} plików)</span>`
+        : '';
       area.innerHTML = `
         <div class="novnc-container">
           <div style="background:var(--bg-surface); padding:10px 16px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); flex-wrap:wrap; gap:8px">
             <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap">
               <span style="font-weight:700; font-size:0.95rem">🖥️ Workspace: <strong>${ws.workspace_id}</strong></span>
+              ${engineBadge}
               <span class="tag tabs">${tabsCount} aktywnych kart</span>
               <span style="font-size:0.8rem; color:var(--text-muted)">Ekran: <code>${ws.display}</code> · Port WS: <code>${ws.ws_port}</code> · RFB: <code>${ws.rfb_port}</code></span>
+              ${stagingInfo}
             </div>
             <div style="display:flex; gap:8px">
               <a href="${ws.novnc_url}" target="_blank" class="btn" style="padding:4px 10px; font-size:0.75rem">Otwórz w nowej karcie ↗</a>
@@ -785,7 +852,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById('previewArea').innerHTML = '';
       currentWorkspaceId = null;
       renderWorkspacesBar();
-      updateUrl({ action: null, workspace: null });
+      updateUrl({ action: null, workspace: null, engine: null });
     }
 
     async function launchNovnc(id) {

@@ -118,7 +118,7 @@ def test_workspace_endpoints(tmp_path, monkeypatch):
         def kill(self): pass
         def wait(self, timeout=None): pass
 
-    def dummy_start(self, summary_text=None, terminal_tabs=None, port=None, interactive=False):
+    def dummy_start(self, *args, **kwargs):
         self.display = 99
         self.rfb_port = 5999
         self.ws_port = 6099
@@ -159,5 +159,77 @@ def test_workspace_endpoints(tmp_path, monkeypatch):
     # 5. Get closed workspace returns 404
     get_closed = client.get(f"/api/v1/workspaces/ws-{sid}")
     assert get_closed.status_code == 404
+
+    # 6. Create Kasm workspace
+    kasm_res = client.post(f"/api/v1/snapshots/{sid}/workspace?engine=kasm")
+    assert kasm_res.status_code == 200
+    kasm_data = kasm_res.json()
+    assert kasm_data["workspace_id"] == f"kasm-{sid}"
+    assert kasm_data["engine"] == "kasm"
+    assert kasm_data["status"] == "running"
+    assert "workspace_dir" in kasm_data
+
+    # Close Kasm workspace
+    close_kasm = client.post(f"/api/v1/workspaces/kasm-{sid}/close")
+    assert close_kasm.status_code == 200
+    assert close_kasm.json()["closed"] is True
+
+    # 7. Virtualization engines catalog endpoint
+    eng_res = client.get("/api/v1/virtualization/engines")
+    assert eng_res.status_code == 200
+    eng_data = eng_res.json()
+    assert eng_data["schema"] == "uncrash.virtualization-engines/v1"
+    assert eng_data["count"] >= 5
+    engine_ids = [e["id"] for e in eng_data["engines"]]
+    assert "native" in engine_ids
+    assert "kasm" in engine_ids
+    assert "clonebox" in engine_ids
+    assert "clonebox-container" in engine_ids
+    assert "pelorus" in engine_ids
+
+    # 8. Create CloneBox VM workspace
+    cb_res = client.post(f"/api/v1/snapshots/{sid}/workspace?engine=clonebox")
+    assert cb_res.status_code == 200
+    cb_data = cb_res.json()
+    assert cb_data["workspace_id"] == f"cb-{sid}"
+    assert cb_data["engine"] == "clonebox"
+    assert cb_data["status"] == "running"
+    assert "workspace_dir" in cb_data
+    assert cb_data["staged_files_count"] >= 3
+
+    # Close CloneBox workspace
+    close_cb = client.post(f"/api/v1/workspaces/cb-{sid}/close")
+    assert close_cb.status_code == 200
+    assert close_cb.json()["closed"] is True
+
+    # 9. Create CloneBox Container workspace
+    cbc_res = client.post(f"/api/v1/snapshots/{sid}/workspace?engine=clonebox-container")
+    assert cbc_res.status_code == 200
+    cbc_data = cbc_res.json()
+    assert cbc_data["workspace_id"] == f"cbc-{sid}"
+    assert cbc_data["engine"] == "clonebox-container"
+    assert cbc_data["status"] == "running"
+    assert "workspace_dir" in cbc_data
+
+    # Close CloneBox Container workspace
+    close_cbc = client.post(f"/api/v1/workspaces/cbc-{sid}/close")
+    assert close_cbc.status_code == 200
+    assert close_cbc.json()["closed"] is True
+
+    # 10. Create Pelorus Twin workspace
+    pel_res = client.post(f"/api/v1/snapshots/{sid}/workspace?engine=pelorus")
+    assert pel_res.status_code == 200
+    pel_data = pel_res.json()
+    assert pel_data["workspace_id"] == f"pelorus-{sid}"
+    assert pel_data["engine"] == "pelorus"
+    assert pel_data["status"] == "running"
+    assert "workspace_dir" in pel_data
+
+    # Close Pelorus workspace
+    close_pel = client.post(f"/api/v1/workspaces/pelorus-{sid}/close")
+    assert close_pel.status_code == 200
+    assert close_pel.json()["closed"] is True
+
+
 
 
