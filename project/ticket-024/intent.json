@@ -1,0 +1,98 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-024",
+  "summary": "Bound noVNC preview total HTTP deadline",
+  "workstream": "application",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "requested"
+  },
+  "allowedPaths": [
+    "project/ticket-024/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "app/uncrash-recovery/server.py",
+    "app/uncrash-recovery/tests/test_server.py",
+    "tests/test_apx_recovery.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "6427a7910cfee31f41ab6073cf1dd8ec7658234f",
+    "targetBranch": "main",
+    "outcome": "Fix confirmed PLF-007 slow HTTP header/body preview hangs, verify using Willman and publish through the protected independent Validator.",
+    "nonGoals": [
+      "No diagnostics/native worker writes; preserve ticket-023 and its pending writer handoff.",
+      "No user IDE actions, session restarts, dependency or protected CI changes."
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 45,
+    "budgets": {
+      "maxImplementationFiles": 3,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "One monotonic 0.2 second deadline applies to connect, request send, header and body socket reads; keep direct loopback/no redirects and existing noVNC recognition. Expose the existing APX unittest classes through a root pytest collection bridge so the deployed protected OneDev tests command exercises the complete APX suite.",
+      "components": [
+        {
+          "name": "APX HTTP preview",
+          "paths": [
+            "app/uncrash-recovery/server.py",
+            "app/uncrash-recovery/tests/test_server.py",
+            "tests/test_apx_recovery.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Revert the bounded preview deadline commit; no persistent state migration."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "python -m pytest app/uncrash-recovery/tests/test_server.py -q"
+        ],
+        "evidence": "Slow headers and body cannot renew the total preview budget."
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "python -m pytest app/uncrash-recovery/tests/test_server.py -q"
+        ],
+        "evidence": "Valid noVNC, redirects, oversized/stopped previews and transfer boundaries still pass."
+      },
+      {
+        "criterion": "AC-03",
+        "commands": [
+          "python -m pytest -q",
+          "./project/governance-check.sh --base 2d82ec367845db10774eb7c1645e0fb8d67bea60"
+        ],
+        "evidence": "Product suite includes APX regression tests through standard root collection; managed governance passes; mandatory X11 fixture is retained."
+      },
+      {
+        "criterion": "AC-04",
+        "commands": [
+          "protected OneDev and independent Validator"
+        ],
+        "evidence": "Exact-head trusted review and protected merge; no direct merge."
+      }
+    ]
+  }
+}

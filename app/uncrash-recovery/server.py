@@ -9,6 +9,7 @@ import re
 import secrets
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import tempfile
@@ -79,11 +80,41 @@ class PreviewPage(HTMLParser):
             self.client = True
 
 
+class DeadlineSocket(socket.socket):
+    """Apply one monotonic budget to reads, including HTTP headers and body."""
+
+    def __init__(self, original, deadline):
+        super().__init__(original.family, original.type, original.proto,
+                         fileno=original.detach())
+        self.deadline = deadline
+
+    def remaining_timeout(self):
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('Preview deadline expired')
+        self.settimeout(remaining)
+
+    def recv_into(self, *args, **kwargs):
+        self.remaining_timeout()
+        return super().recv_into(*args, **kwargs)
+
+    def recv(self, *args, **kwargs):
+        self.remaining_timeout()
+        return super().recv(*args, **kwargs)
+
+    def sendall(self, *args, **kwargs):
+        self.remaining_timeout()
+        return super().sendall(*args, **kwargs)
+
+
 def preview_available(value):
     """Check HTTP preview readiness; this does not attest an RFB connection."""
     url = urlsplit(loopback_url(value))
+    deadline = time.monotonic() + 0.2
     connection = HTTPConnection(url.hostname, url.port, timeout=0.2)
     try:
+        connection.connect()
+        connection.sock = DeadlineSocket(connection.sock, deadline)
         path = url.path or '/'
         if url.query:
             path += '?' + url.query
