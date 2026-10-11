@@ -1,0 +1,85 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-010",
+  "summary": "detect LLM session storage corruption and panic issues",
+  "workstream": "application",
+  "classification": {
+    "kind": "SERVICE",
+    "priority": "P2",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-010/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/diagnostics.py",
+    "src/uncrash/recovery.py",
+    "tests/test_diagnostics.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "dcf61e8bf2e03cd941b2f9365aa8b625cf774b7e",
+    "targetBranch": "main",
+    "outcome": "Independently publish LLM coding-agent storage corruption detection (SQLite quick_check) and panic log scanning in uncrash diagnostics and recovery.",
+    "nonGoals": [
+      "No external network dependencies",
+      "No changes outside owned diagnostics, recovery and ticket carriers"
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 15,
+    "budgets": {
+      "maxImplementationFiles": 3,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Add SQLite integrity check via PRAGMA quick_check, panic log scanning, agent storage health check, and database salvage in diagnostics and recovery modules.",
+      "components": [
+        {
+          "name": "diagnostics",
+          "paths": [
+            "src/uncrash/diagnostics.py",
+            "src/uncrash/recovery.py",
+            "tests/test_diagnostics.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Protected follow-up reverting ticket-010 changes."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "python -m pytest tests/test_diagnostics.py -q"
+        ],
+        "evidence": "All 19 diagnostic unit tests passing without skips."
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "./project/governance-check.sh",
+          "protected native OneDev verification",
+          "independent Validator review and merge"
+        ],
+        "evidence": "All preserved gates and exact-head trusted publication."
+      }
+    ]
+  }
+}

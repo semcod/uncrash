@@ -611,3 +611,68 @@ def close_gui_app(pid=None, name=None, force=False, expected_start=None):
     finally:
         os.close(descriptor)
 
+
+def salvage_agent_session_db(source_path: Path, output_path: Path) -> dict:
+    """Quarantine and salvage a corrupted SQLite session database."""
+    source_path = Path(source_path)
+    output_path = Path(output_path)
+    session_id = source_path.stem
+    h = hashlib.sha256()
+    with open(source_path, 'rb') as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    orig_sha256 = h.hexdigest()
+
+    from datetime import datetime, timezone
+    timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+    quarantine_path = source_path.parent / f'{source_path.name}.corrupt.{timestamp}'
+    shutil.copy2(source_path, quarantine_path)
+
+    dump_proc = subprocess.run(
+        ['sqlite3', str(source_path), '.dump'],
+        capture_output=True,
+        text=False
+    )
+    if dump_proc.returncode != 0 and not dump_proc.stdout:
+        return {
+            'schema': 'wellmanifest.session-recovery-salvage/v1',
+            'sessionId': session_id,
+            'originalStorePath': str(source_path),
+            'quarantinedPath': str(quarantine_path),
+            'recoveredStorePath': str(output_path),
+            'originalSha256': orig_sha256,
+            'recoveredSha256': '0' * 64,
+            'salvagedStepCount': 0,
+            'diagnosticFinding': f'Failed to dump SQL: {dump_proc.stderr.decode(errors="replace")}',
+            'salvagedAt': datetime.now(timezone.utc).isoformat(),
+            'status': 'FAILED',
+        }
+
+    if output_path.exists():
+        output_path.unlink()
+
+    subprocess.run(['sqlite3', str(output_path)], input=dump_proc.stdout, capture_output=True)
+
+    h_rec = hashlib.sha256()
+    if output_path.is_file():
+        with open(output_path, 'rb') as f:
+            while chunk := f.read(65536):
+                h_rec.update(chunk)
+        recovered_sha256 = h_rec.hexdigest()
+    else:
+        recovered_sha256 = '0' * 64
+
+    return {
+        'schema': 'wellmanifest.session-recovery-salvage/v1',
+        'sessionId': session_id,
+        'originalStorePath': str(source_path),
+        'quarantinedPath': str(quarantine_path),
+        'recoveredStorePath': str(output_path),
+        'originalSha256': orig_sha256,
+        'recoveredSha256': recovered_sha256,
+        'salvagedStepCount': 0,
+        'salvagedAt': datetime.now(timezone.utc).isoformat(),
+        'status': 'COMPLETED' if output_path.is_file() else 'FAILED',
+    }
+
+
