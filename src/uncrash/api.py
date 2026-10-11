@@ -5,35 +5,31 @@ Dispatches operations across Shell CLI, REST HTTP (FastAPI) and MCP (Model Conte
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-import shutil
+import socket
 import subprocess
-import tempfile
 from typing import Any, Dict, List, Optional
 
 from .recovery import detected_gui_apps, close_gui_app, jetbrains_state
 from .window_control import require_process_consent
 from .health import inspect_health
-from .store import RecoveryError, build_native, find_native_worker
+from .store import RecoveryError, find_native_worker, no_links
 from .inventory import desktop_inventory
 from .web_ui import DASHBOARD_HTML
 
 
-def native_list_snapshots(state_root: Path = None) -> list[dict] | None:
+def native_list_snapshots(state_root: Path = None, origin: str = None) -> list[dict] | None:
     """Attempt fast native Rust snapshot listing; returns None on fallback."""
+    try:
+        state_root = no_links(state_root or Path.home() / ".local/state/uncrash")
+    except (OSError, RecoveryError):
+        return None
     binary = find_native_worker(state_root)
-    if binary is None and shutil.which('rustc'):
-        try:
-            target_root = state_root or (Path(tempfile.gettempdir()) / f'uncrash-{os.getuid()}')
-            binary = build_native(target_root)
-        except (RecoveryError, OSError):
-            binary = None
     if binary is None:
         return None
     try:
         proc = subprocess.run(
-            [str(binary), '--list-snapshots', str(state_root or Path.home() / '.local/state/uncrash')],
+            [str(binary), '--list-snapshots', str(state_root), origin or socket.gethostname()],
             capture_output=True,
             text=True,
             timeout=30,
@@ -281,7 +277,7 @@ def create_fastapi_app(store=None, config=None):
 
     @app.get("/api/v1/snapshots")
     def get_snapshots():
-        native_items = native_list_snapshots(resolved_store.root)
+        native_items = native_list_snapshots(resolved_store.root, resolved_store.origin)
         if native_items is not None:
             return {"schema": "uncrash.snapshots-list/v1", "count": len(native_items), "snapshots": native_items}
         from .preview import extract_preview_metadata
@@ -539,7 +535,7 @@ def create_mcp_server(store=None, config=None):
         description="List all available recovery snapshots with timestamps, profile and terminal tab counts."
     )
     def mcp_list_snapshots() -> str:
-        native_items = native_list_snapshots(resolved_store.root)
+        native_items = native_list_snapshots(resolved_store.root, resolved_store.origin)
         if native_items is not None:
             return json.dumps({"count": len(native_items), "snapshots": native_items}, ensure_ascii=False, indent=2)
         from .preview import extract_preview_metadata

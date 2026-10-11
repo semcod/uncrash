@@ -73,6 +73,7 @@ extern "C" {
         flags: u32,
     ) -> isize;
 }
+const NONBLOCK: c_int = 0o4000;
 const NOFOLLOW: c_int = 0o400000;
 const DIRECTORY: c_int = 0o200000;
 const CLOEXEC: c_int = 0o2000000;
@@ -547,62 +548,69 @@ fn json_escape(s: &str) -> String {
     }
     out
 }
+fn python_space(c: char) -> bool {
+    c.is_ascii_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
+}
 fn find_panic_in_content(content: &str) -> Option<(String, String)> {
-    for line in content.lines() {
-        let lower = line.to_ascii_lowercase();
-        if let Some(pos) = lower.find("caught panic:") {
-            let orig_from_match = &line[pos..];
-            let after_prefix = &orig_from_match["caught panic:".len()..];
-            let detail = after_prefix.trim_start();
-            let signature = orig_from_match.trim();
-            return Some((signature.to_string(), detail.trim().to_string()));
-        }
-    }
-    for line in content.lines() {
-        let lower = line.to_ascii_lowercase();
-        if let Some(pos) = lower.find("runtime error:") {
-            let orig_from_match = &line[pos..];
-            let after_prefix = &orig_from_match["runtime error:".len()..];
-            let detail = after_prefix.trim_start();
-            let detail_lower = detail.to_ascii_lowercase();
-            if detail_lower.starts_with("invalid memory address or nil pointer dereference") {
-                let signature = orig_from_match.trim();
-                return Some((signature.to_string(), detail.trim().to_string()));
-            }
-        }
-    }
-    for line in content.lines() {
-        let lower = line.to_ascii_lowercase();
-        if let Some(pos) = lower.find("failed to load conversation ") {
-            let orig_from_match = &line[pos..];
-            let rest = &orig_from_match["failed to load conversation ".len()..];
-            if let Some(colon_pos) = rest.find(':') {
-                let id_candidate = rest[..colon_pos].trim();
-                if !id_candidate.is_empty() && id_candidate.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
-                    let after_colon = &rest[colon_pos + 1..];
-                    let after_colon_lower = after_colon.to_ascii_lowercase();
-                    if after_colon_lower.contains("database disk image is malformed") {
-                        let signature = orig_from_match.trim();
-                        return Some((signature.to_string(), id_candidate.to_string()));
-                    }
+    let lower = content.to_ascii_lowercase();
+    for (prefix, required) in [
+        ("caught panic:", ""),
+        (
+            "runtime error:",
+            "invalid memory address or nil pointer dereference",
+        ),
+        (
+            "failed to load conversation ",
+            "database disk image is malformed",
+        ),
+        ("program was killed:", "program experienced a panic"),
+    ] {
+        for (pos, _) in lower.match_indices(prefix) {
+            let rest = &content[pos + prefix.len()..];
+            let (rest, id) = if prefix == "failed to load conversation " {
+                let colon = match rest.find(':') {
+                    Some(c) => c,
+                    None => continue,
+                };
+                let id = &rest[..colon];
+                if id.is_empty() || !id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+                    continue;
                 }
-            }
-        }
-    }
-    for line in content.lines() {
-        let lower = line.to_ascii_lowercase();
-        if let Some(pos) = lower.find("program was killed:") {
-            let orig_from_match = &line[pos..];
-            let after_prefix = &orig_from_match["program was killed:".len()..];
-            let detail = after_prefix.trim_start();
+                (&rest[colon + 1..], Some(id))
+            } else {
+                (rest, None)
+            };
+            let rest = rest.trim_start_matches(python_space);
+            let detail = &rest[..rest.find('\n').unwrap_or(rest.len())];
             let detail_lower = detail.to_ascii_lowercase();
-            if detail_lower.starts_with("program experienced a panic") {
-                let signature = orig_from_match.trim();
-                return Some((signature.to_string(), detail.trim().to_string()));
+            if if id.is_some() {
+                !detail_lower.contains(required)
+            } else {
+                !detail_lower.starts_with(required)
+            } {
+                continue;
             }
+            let end = content.len() - rest.len() + detail.len();
+            return Some((
+                content[pos..end].trim_matches(python_space).to_string(),
+                id.unwrap_or(detail).trim_matches(python_space).to_string(),
+            ));
         }
     }
     None
+}
+fn read_regular(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
+    let file = open(path, NONBLOCK)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() || meta.len() > limit {
+        return Err(fail());
+    }
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(fail());
+    }
+    Ok(bytes)
 }
 fn scan_panics(args: &[String]) -> io::Result<()> {
     if args.is_empty() {
@@ -619,6 +627,13 @@ fn scan_panics(args: &[String]) -> io::Result<()> {
         20
     };
 
+    let _directory_guard = match open(log_dir, DIRECTORY) {
+        Ok(f) => f,
+        Err(_) => {
+            println!("[]");
+            return Ok(());
+        }
+    };
     let meta = match std::fs::symlink_metadata(log_dir) {
         Ok(m) => m,
         Err(_) => {
@@ -672,15 +687,10 @@ fn scan_panics(args: &[String]) -> io::Result<()> {
             None => continue,
         };
 
-        let c_path = match CString::new(log_path.as_os_str().as_bytes()) {
-            Ok(c) => c,
+        let mut file = match open(&log_path, NONBLOCK) {
+            Ok(f) => f,
             Err(_) => continue,
         };
-        let fd = unsafe { openat(-100 /* AT_FDCWD */, c_path.as_ptr(), 0 /* O_RDONLY */ | NOFOLLOW | CLOEXEC) };
-        if fd < 0 {
-            continue;
-        }
-        let mut file = unsafe { File::from_raw_fd(fd) };
         let meta = match file.metadata() {
             Ok(m) => m,
             Err(_) => continue,
@@ -702,6 +712,9 @@ fn scan_panics(args: &[String]) -> io::Result<()> {
         if file.take(chunk_size).read_to_end(&mut buf).is_err() {
             continue;
         }
+        if !buf.is_ascii() {
+            return Err(fail());
+        } // Python owns Unicode regex semantics.
         let content = String::from_utf8_lossy(&buf);
 
         if let Some((signature, matched_detail)) = find_panic_in_content(&content) {
@@ -754,7 +767,7 @@ fn sha256_digest(data: &[u8]) -> Option<String> {
 enum JsonValue {
     Null,
     Bool(bool),
-    Number(f64),
+    Number(String),
     String(String),
     Array(Vec<JsonValue>),
     Object(Vec<(String, JsonValue)>),
@@ -764,7 +777,7 @@ impl JsonValue {
     fn get(&self, key: &str) -> Option<&JsonValue> {
         match self {
             JsonValue::Object(map) => {
-                for (k, v) in map {
+                for (k, v) in map.iter().rev() {
                     if k == key {
                         return Some(v);
                     }
@@ -784,8 +797,8 @@ impl JsonValue {
 
     fn as_i64(&self) -> Option<i64> {
         match self {
-            JsonValue::Number(n) => Some(*n as i64),
-            JsonValue::String(s) => s.parse::<i64>().ok(),
+            JsonValue::Number(n) => n.parse::<i64>().ok(),
+
             _ => None,
         }
     }
@@ -808,11 +821,18 @@ impl JsonValue {
 struct JsonParser<'a> {
     bytes: &'a [u8],
     pos: usize,
+    depth: usize,
+    unsupported: bool,
 }
 
 impl<'a> JsonParser<'a> {
     fn new(input: &'a str) -> Self {
-        Self { bytes: input.as_bytes(), pos: 0 }
+        Self {
+            bytes: input.as_bytes(),
+            pos: 0,
+            depth: 0,
+            unsupported: false,
+        }
     }
 
     fn peek(&self) -> Option<u8> {
@@ -844,111 +864,109 @@ impl<'a> JsonParser<'a> {
     }
 
     fn parse(&mut self) -> Option<JsonValue> {
+        if self.depth >= 128 {
+            self.unsupported = true;
+            return None;
+        }
+        self.depth += 1;
         self.skip_whitespace();
-        let val = match self.peek()? {
-            b'n' => self.parse_null()?,
-            b't' | b'f' => self.parse_bool()?,
-            b'"' => JsonValue::String(self.parse_string()?),
-            b'[' => self.parse_array(false)?,
-            b'{' => self.parse_object(false, false)?,
-            b'-' | b'0'..=b'9' => self.parse_number()?,
-            _ => return None,
+        let value = match self.peek() {
+            Some(b'n') => self.parse_null(),
+            Some(b't' | b'f') => self.parse_bool(),
+            Some(b'"') => self.parse_string().map(JsonValue::String),
+            Some(b'[') => self.parse_array(false),
+            Some(b'{') => self.parse_object(false, false),
+            Some(b'-' | b'0'..=b'9') => self.parse_number(),
+            Some(b'N' | b'I') => {
+                self.unsupported = true;
+                None
+            }
+            _ => None,
         };
+        self.depth -= 1;
         self.skip_whitespace();
-        Some(val)
+        value
     }
-
+    fn manifest(&mut self, preview: bool) -> Option<JsonValue> {
+        self.skip_whitespace();
+        if self.peek()? != b'{' {
+            return None;
+        }
+        let value = self.parse_object(true, preview)?;
+        self.skip_whitespace();
+        if self.pos != self.bytes.len() {
+            return None;
+        }
+        Some(value)
+    }
     fn parse_manifest_health(&mut self) -> Option<JsonValue> {
-        self.skip_whitespace();
-        if self.peek()? != b'{' {
-            return None;
-        }
-        self.parse_object(true, false)
+        self.manifest(false)
     }
-
     fn parse_manifest_preview(&mut self) -> Option<JsonValue> {
-        self.skip_whitespace();
-        if self.peek()? != b'{' {
-            return None;
-        }
-        self.parse_object(true, true)
+        self.manifest(true)
     }
-
     fn skip_value(&mut self) -> bool {
+        // Strict streaming validation without materializing large discarded arrays.
+        if self.depth >= 128 {
+            self.unsupported = true;
+            return false;
+        }
+        self.depth += 1;
         self.skip_whitespace();
-        match self.peek() {
-            Some(b'"') => self.skip_string(),
-            Some(b'[') => self.skip_compound(b'[', b']'),
-            Some(b'{') => self.skip_compound(b'{', b'}'),
-            Some(b'-') | Some(b'0'..=b'9') => {
-                while let Some(b) = self.peek() {
-                    if b.is_ascii_digit() || b == b'.' || b == b'e' || b == b'E' || b == b'+' || b == b'-' {
-                        self.pos += 1;
-                    } else {
-                        break;
+        let result = (|| -> Option<()> {
+            match self.peek()? {
+                b'[' | b'{' => {
+                    let object = self.bump()? == b'{';
+                    let closing = if object { b'}' } else { b']' };
+                    self.skip_whitespace();
+                    if self.peek() == Some(closing) {
+                        self.bump();
+                        return Some(());
+                    }
+                    loop {
+                        if object {
+                            self.parse_string()?;
+                            self.skip_whitespace();
+                            if self.bump()? != b':' {
+                                return None;
+                            }
+                        }
+                        if !self.skip_value() {
+                            return None;
+                        }
+                        self.skip_whitespace();
+                        match self.bump()? {
+                            b',' => self.skip_whitespace(),
+                            c if c == closing => break,
+                            _ => return None,
+                        }
                     }
                 }
-                true
+                b'"' => {
+                    self.parse_string()?;
+                }
+                b'n' => {
+                    self.parse_null()?;
+                }
+                b't' | b'f' => {
+                    self.parse_bool()?;
+                }
+                b'-' | b'0'..=b'9' => {
+                    self.parse_number()?;
+                }
+                b'N' | b'I' => {
+                    self.unsupported = true;
+                    return None;
+                }
+                _ => return None,
             }
-            Some(b't') => {
-                if self.pos + 4 <= self.bytes.len() && &self.bytes[self.pos..self.pos+4] == b"true" {
-                    self.pos += 4; true
-                } else { false }
-            }
-            Some(b'f') => {
-                if self.pos + 5 <= self.bytes.len() && &self.bytes[self.pos..self.pos+5] == b"false" {
-                    self.pos += 5; true
-                } else { false }
-            }
-            Some(b'n') => {
-                if self.pos + 4 <= self.bytes.len() && &self.bytes[self.pos..self.pos+4] == b"null" {
-                    self.pos += 4; true
-                } else { false }
-            }
-            _ => false,
-        }
+            Some(())
+        })();
+        self.depth -= 1;
+        result.is_some()
     }
-
-    fn skip_string(&mut self) -> bool {
-        if self.bump() != Some(b'"') { return false; }
-        while self.pos < self.bytes.len() {
-            let b = self.bytes[self.pos];
-            if b == b'"' {
-                self.pos += 1;
-                return true;
-            }
-            if b == b'\\' {
-                self.pos += 2;
-            } else {
-                self.pos += 1;
-            }
-        }
-        false
-    }
-
-    fn skip_compound(&mut self, open: u8, close: u8) -> bool {
-        if self.bump() != Some(open) { return false; }
-        let mut depth = 1usize;
-        while self.pos < self.bytes.len() {
-            let b = self.bytes[self.pos];
-            if b == b'"' {
-                if !self.skip_string() { return false; }
-            } else if b == open {
-                depth += 1;
-                self.pos += 1;
-            } else if b == close {
-                depth -= 1;
-                self.pos += 1;
-                if depth == 0 { return true; }
-            } else {
-                self.pos += 1;
-            }
-        }
-        false
-    }
-
     fn parse_null(&mut self) -> Option<JsonValue> {
-        if self.pos + 4 <= self.bytes.len() && &self.bytes[self.pos..self.pos+4] == b"null" {
+        if self.pos + 4 <= self.bytes.len() && &self.bytes[self.pos..self.pos + 4] == b"null" {
             self.pos += 4;
             Some(JsonValue::Null)
         } else {
@@ -958,14 +976,14 @@ impl<'a> JsonParser<'a> {
 
     fn parse_bool(&mut self) -> Option<JsonValue> {
         if self.peek()? == b't' {
-            if self.pos + 4 <= self.bytes.len() && &self.bytes[self.pos..self.pos+4] == b"true" {
+            if self.pos + 4 <= self.bytes.len() && &self.bytes[self.pos..self.pos + 4] == b"true" {
                 self.pos += 4;
                 Some(JsonValue::Bool(true))
             } else {
                 None
             }
         } else {
-            if self.pos + 5 <= self.bytes.len() && &self.bytes[self.pos..self.pos+5] == b"false" {
+            if self.pos + 5 <= self.bytes.len() && &self.bytes[self.pos..self.pos + 5] == b"false" {
                 self.pos += 5;
                 Some(JsonValue::Bool(false))
             } else {
@@ -985,6 +1003,9 @@ impl<'a> JsonParser<'a> {
             if b == b'"' {
                 break;
             }
+            if b < 0x20 {
+                return None;
+            }
             if b == b'\\' {
                 has_escapes = true;
                 self.pos += 2;
@@ -999,7 +1020,9 @@ impl<'a> JsonParser<'a> {
         self.pos += 1;
 
         if !has_escapes {
-            return std::str::from_utf8(&self.bytes[start..end]).ok().map(|s| s.to_string());
+            return std::str::from_utf8(&self.bytes[start..end])
+                .ok()
+                .map(|s| s.to_string());
         }
 
         let mut s = String::with_capacity(end - start);
@@ -1007,7 +1030,9 @@ impl<'a> JsonParser<'a> {
         while i < end {
             if self.bytes[i] == b'\\' {
                 i += 1;
-                if i >= end { return None; }
+                if i >= end {
+                    return None;
+                }
                 match self.bytes[i] {
                     b'"' => s.push('"'),
                     b'\\' => s.push('\\'),
@@ -1019,14 +1044,39 @@ impl<'a> JsonParser<'a> {
                     b't' => s.push('\t'),
                     b'u' => {
                         i += 1;
-                        if i + 4 > end { return None; }
-                        let hex_str = std::str::from_utf8(&self.bytes[i..i+4]).ok()?;
-                        let code = u32::from_str_radix(hex_str, 16).ok()?;
-                        if let Some(ch) = char::from_u32(code) {
-                            s.push(ch);
-                        } else {
-                            s.push('\u{fffd}');
+                        if i + 4 > end {
+                            return None;
                         }
+                        let hex_str = std::str::from_utf8(&self.bytes[i..i + 4]).ok()?;
+                        let code = u32::from_str_radix(hex_str, 16).ok()?;
+                        let code = if (0xd800..=0xdbff).contains(&code) {
+                            if i + 10 > end || &self.bytes[i + 4..i + 6] != b"\\u" {
+                                self.unsupported = true;
+                                return None;
+                            }
+                            let low = u32::from_str_radix(
+                                std::str::from_utf8(&self.bytes[i + 6..i + 10]).ok()?,
+                                16,
+                            )
+                            .ok()?;
+                            if !(0xdc00..=0xdfff).contains(&low) {
+                                self.unsupported = true;
+                                return None;
+                            }
+                            i += 6;
+                            0x10000 + ((code - 0xd800) << 10) + low - 0xdc00
+                        } else {
+                            code
+                        };
+                        // Python accepts lone surrogates; delegate rather than substituting bytes.
+                        let ch = match char::from_u32(code) {
+                            Some(c) => c,
+                            None => {
+                                self.unsupported = true;
+                                return None;
+                            }
+                        };
+                        s.push(ch);
                         i += 3;
                     }
                     _ => return None,
@@ -1047,20 +1097,54 @@ impl<'a> JsonParser<'a> {
 
     fn parse_number(&mut self) -> Option<JsonValue> {
         let start = self.pos;
+        if self.bytes[start..].starts_with(b"-Infinity") {
+            self.unsupported = true;
+            return None;
+        }
         if self.peek() == Some(b'-') {
             self.pos += 1;
         }
-        while let Some(b) = self.peek() {
-            if b.is_ascii_digit() || b == b'.' || b == b'e' || b == b'E' || b == b'+' || b == b'-' {
+        match self.peek()? {
+            b'0' => self.pos += 1,
+            b'1'..=b'9' => {
+                while self.peek().is_some_and(|b| b.is_ascii_digit()) {
+                    self.pos += 1;
+                }
+            }
+            _ => return None,
+        }
+        if self.peek() == Some(b'.') {
+            self.pos += 1;
+            let before = self.pos;
+            while self.peek().is_some_and(|b| b.is_ascii_digit()) {
                 self.pos += 1;
-            } else {
-                break;
+            }
+            if before == self.pos {
+                return None;
             }
         }
-        let s = std::str::from_utf8(&self.bytes[start..self.pos]).ok()?;
-        s.parse::<f64>().ok().map(JsonValue::Number)
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            self.pos += 1;
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.pos += 1;
+            }
+            let before = self.pos;
+            while self.peek().is_some_and(|b| b.is_ascii_digit()) {
+                self.pos += 1;
+            }
+            if before == self.pos {
+                return None;
+            }
+        }
+        let token = &self.bytes[start..self.pos];
+        if token.len() > 4300 {
+            self.unsupported = true;
+            return None;
+        }
+        Some(JsonValue::Number(
+            std::str::from_utf8(token).ok()?.to_string(),
+        ))
     }
-
     fn parse_array(&mut self, is_profiles: bool) -> Option<JsonValue> {
         if self.bump()? != b'[' {
             return None;
@@ -1073,7 +1157,7 @@ impl<'a> JsonParser<'a> {
         }
         loop {
             let item = if is_profiles {
-                self.parse_object(false, true)?
+                self.parse()?
             } else {
                 self.parse()?
             };
@@ -1113,8 +1197,18 @@ impl<'a> JsonParser<'a> {
             }
             if is_manifest_root {
                 if is_preview {
-                    if key != "schema" && key != "id" && key != "created_at" && key != "profiles" && key != "session_hosts" && key != "jetbrains" {
-                        if !self.skip_value() { return None; }
+                    if key != "schema"
+                        && key != "origin"
+                        && key != "encryption"
+                        && key != "id"
+                        && key != "created_at"
+                        && key != "profiles"
+                        && key != "session_hosts"
+                        && key != "jetbrains"
+                    {
+                        if !self.skip_value() {
+                            return None;
+                        }
                     } else if key == "profiles" {
                         self.skip_whitespace();
                         let val = self.parse_array(true)?;
@@ -1124,15 +1218,24 @@ impl<'a> JsonParser<'a> {
                         entries.push((key, val));
                     }
                 } else {
-                    if key != "schema" && key != "id" && key != "created_at" && key != "origin" && key != "jetbrains" {
-                        if !self.skip_value() { return None; }
+                    if key != "schema"
+                        && key != "id"
+                        && key != "created_at"
+                        && key != "origin"
+                        && key != "jetbrains"
+                    {
+                        if !self.skip_value() {
+                            return None;
+                        }
                     } else {
                         let val = self.parse()?;
                         entries.push((key, val));
                     }
                 }
             } else if is_preview && key == "files" {
-                if !self.skip_value() { return None; }
+                if !self.skip_value() {
+                    return None;
+                }
             } else {
                 let val = self.parse()?;
                 entries.push((key, val));
@@ -1179,23 +1282,51 @@ fn parse_iso_datetime(s: &str) -> Option<f64> {
     let month: i64 = date_parts[1].parse().ok()?;
     let day: i64 = date_parts[2].parse().ok()?;
 
+    if !(1..=9999).contains(&year) || !(1..=12).contains(&month) {
+        return None;
+    }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let max_day = match month {
+        2 => {
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if !(1..=max_day).contains(&day) {
+        return None;
+    }
     let time_str = parts[1];
     let (time_main, tz_offset) = if time_str.ends_with('Z') {
         (&time_str[..time_str.len() - 1], 0i64)
     } else if let Some(idx) = time_str.rfind('+') {
         let (tm, tz) = time_str.split_at(idx);
         let tz_parts: Vec<&str> = tz[1..].split(':').collect();
-        if tz_parts.len() != 2 { return None; }
+        if tz_parts.len() != 2 {
+            return None;
+        }
         let h: i64 = tz_parts[0].parse().ok()?;
         let m: i64 = tz_parts[1].parse().ok()?;
+        if h > 23 || m > 59 || h < 0 || m < 0 {
+            return None;
+        }
         (tm, h * 3600 + m * 60)
     } else if let Some(idx) = time_str.rfind('-') {
         let (tm, tz) = time_str.split_at(idx);
         if tm.contains(':') {
             let tz_parts: Vec<&str> = tz[1..].split(':').collect();
-            if tz_parts.len() != 2 { return None; }
+            if tz_parts.len() != 2 {
+                return None;
+            }
             let h: i64 = tz_parts[0].parse().ok()?;
             let m: i64 = tz_parts[1].parse().ok()?;
+            if h > 23 || m > 59 || h < 0 || m < 0 {
+                return None;
+            }
             (tm, -(h * 3600 + m * 60))
         } else {
             return None;
@@ -1215,6 +1346,12 @@ fn parse_iso_datetime(s: &str) -> Option<f64> {
         let frac_str = &tm_parts[2][dot_idx + 1..];
         let mut frac_val = 0.0f64;
         let mut div = 10.0f64;
+        if frac_str.len() > 6 {
+            return None;
+        }
+        if frac_str.is_empty() || !frac_str.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
         for c in frac_str.chars() {
             if let Some(d) = c.to_digit(10) {
                 frac_val += (d as f64) / div;
@@ -1227,6 +1364,9 @@ fn parse_iso_datetime(s: &str) -> Option<f64> {
         (s, 0.0f64)
     };
 
+    if !(0..=23).contains(&hour) || !(0..=59).contains(&min) || !(0..=59).contains(&sec) {
+        return None;
+    }
     let days = days_from_civil(year, month, day);
     let epoch_secs = days * 86400 + hour * 3600 + min * 60 + sec - tz_offset;
     Some(epoch_secs as f64 + frac)
@@ -1251,51 +1391,96 @@ struct ProcessHealthResult {
     obs: Vec<((Option<String>, i64, String, i64), HistoricalRecord)>,
 }
 
-fn process_health_dir(root: &Path, dir_name: &str, now_ts: f64) -> Result<ProcessHealthResult, ()> {
+fn process_health_dir(
+    root: &Path,
+    dir_name: &str,
+    now_ts: f64,
+) -> Result<ProcessHealthResult, bool> {
     let dir_path = root.join(dir_name);
     let manifest_path = dir_path.join("manifest.json");
     let sha_path = dir_path.join("manifest.sha256");
 
-    let c_path = CString::new(manifest_path.as_os_str().as_bytes()).map_err(|_| ())?;
-    let fd = unsafe { openat(-100, c_path.as_ptr(), 0 | NOFOLLOW | CLOEXEC) };
-    if fd < 0 {
-        return Err(());
-    }
-    let mut file = unsafe { File::from_raw_fd(fd) };
-    let meta = file.metadata().map_err(|_| ())?;
-    if !meta.is_file() || meta.len() > 32 * 1024 * 1024 {
-        return Err(());
-    }
-    let mut raw = Vec::with_capacity(meta.len() as usize);
-    file.read_to_end(&mut raw).map_err(|_| ())?;
-
-    let calc_hash = sha256_digest(&raw).ok_or(())?;
-    let expected_hash = fs::read_to_string(&sha_path).map_err(|_| ())?.trim().to_lowercase();
+    let raw = read_regular(&manifest_path, 32 * 1024 * 1024).map_err(|_| false)?;
+    let calc_hash = sha256_digest(&raw).ok_or(false)?;
+    let hash_bytes = read_regular(&sha_path, 4096).map_err(|_| false)?;
+    let expected_hash = std::str::from_utf8(&hash_bytes).map_err(|_| false)?.trim();
     if calc_hash != expected_hash {
-        return Err(());
+        return Err(false);
     }
 
-    let raw_str = std::str::from_utf8(&raw).map_err(|_| ())?;
+    let raw_str = std::str::from_utf8(&raw).map_err(|_| false)?;
+    let raw_str = raw_str.strip_prefix('\u{feff}').unwrap_or(raw_str);
     let mut parser = JsonParser::new(raw_str);
-    let data = parser.parse_manifest_health().ok_or(())?;
+    let data = parser.parse_manifest_health().ok_or(parser.unsupported)?;
 
     if data.get("schema").and_then(|v| v.as_str()) != Some("uncrash.snapshot/v1") {
-        return Err(());
+        return Err(false);
     }
     if data.get("id").and_then(|v| v.as_str()) != Some(dir_name) {
-        return Err(());
+        return Err(false);
     }
 
-    let created_str = data.get("created_at").and_then(|v| v.as_str()).ok_or(())?;
-    let created_ts = parse_iso_datetime(created_str).ok_or(())?;
+    let created_str = data
+        .get("created_at")
+        .and_then(|v| v.as_str())
+        .ok_or(false)?;
+    let created_ts = parse_iso_datetime(created_str).ok_or(true)?;
     if created_ts > now_ts {
-        return Err(());
+        return Err(false);
     }
 
     let mut obs = Vec::new();
     let providers: HashSet<&'static str> = HashSet::from(["codex", "claude", "agy"]);
 
+    if let Some(origin) = data.get("origin") {
+        if !matches!(origin, JsonValue::String(_) | JsonValue::Null) {
+            return Err(true);
+        }
+    }
     if let Some(jb) = data.get("jetbrains") {
+        if !matches!(jb, JsonValue::Object(_)) {
+            return Err(true);
+        }
+        for key in ["processes", "descendants"] {
+            if let Some(rows) = jb.get(key) {
+                let rows = rows.as_array().ok_or(true)?;
+                for row in rows {
+                    if !matches!(row, JsonValue::Object(_))
+                        || row.get("pid").and_then(|v| v.as_i64()).is_none()
+                    {
+                        return Err(true);
+                    }
+                    if key == "descendants" && row.get("ppid").and_then(|v| v.as_i64()).is_none() {
+                        return Err(true);
+                    }
+                    if key == "processes" {
+                        if row
+                            .get("root_ide_candidate")
+                            .is_some_and(|v| !matches!(v, JsonValue::Bool(_)))
+                        {
+                            return Err(true);
+                        }
+                    } else if row
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|n| providers.contains(n))
+                    {
+                        if row.get("ppid").and_then(|v| v.as_i64()).is_none()
+                            || row.get("start_ticks").and_then(|v| v.as_str()).is_none()
+                        {
+                            return Err(true);
+                        }
+                        for field in ["cwd", "terminal"] {
+                            if row.get(field).is_some_and(|v| {
+                                !matches!(v, JsonValue::Null | JsonValue::String(_))
+                            }) {
+                                return Err(true);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let mut roots = HashSet::new();
         if let Some(procs) = jb.get("processes").and_then(|v| v.as_array()) {
             for proc in procs {
@@ -1307,7 +1492,11 @@ fn process_health_dir(root: &Path, dir_name: &str, now_ts: f64) -> Result<Proces
             }
         }
 
-        let mut descendants_map: HashMap<i64, (i64, String, String, Option<String>, Option<String>)> = HashMap::new();
+        let mut descendant_order = Vec::new();
+        let mut descendants_map: HashMap<
+            i64,
+            (i64, String, String, Option<String>, Option<String>),
+        > = HashMap::new();
         if let Some(descendants) = jb.get("descendants").and_then(|v| v.as_array()) {
             for row in descendants {
                 let pid = match row.get("pid").and_then(|v| v.as_i64()) {
@@ -1318,23 +1507,37 @@ fn process_health_dir(root: &Path, dir_name: &str, now_ts: f64) -> Result<Proces
                     Some(p) => p,
                     None => continue,
                 };
-                let name = match row.get("name").and_then(|v| v.as_str()) {
-                    Some(n) => n.to_string(),
-                    None => continue,
+                let name = row
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let start_ticks = match row.get("start_ticks").and_then(|v| v.as_str()) {
+                    Some(s) => s.to_string(),
+                    None if providers.contains(name.as_str()) => return Err(true),
+                    None => String::new(),
                 };
-                let start_ticks = match row.get("start_ticks") {
-                    Some(JsonValue::String(s)) => s.clone(),
-                    Some(JsonValue::Number(n)) => (*n as i64).to_string(),
-                    _ => continue,
-                };
-                let cwd = row.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
-                let terminal = row.get("terminal").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let cwd = row
+                    .get("cwd")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let terminal = row
+                    .get("terminal")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                if !descendants_map.contains_key(&pid) {
+                    descendant_order.push(pid);
+                }
                 descendants_map.insert(pid, (ppid, name, start_ticks, cwd, terminal));
             }
 
-            let origin = data.get("origin").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let origin = data
+                .get("origin")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
 
-            for (&pid, (ppid, name, start_ticks, cwd, terminal)) in &descendants_map {
+            for pid in descendant_order {
+                let (ppid, name, start_ticks, cwd, terminal) = &descendants_map[&pid];
                 if !providers.contains(name.as_str()) {
                     continue;
                 }
@@ -1356,17 +1559,20 @@ fn process_health_dir(root: &Path, dir_name: &str, now_ts: f64) -> Result<Proces
                 }
                 let ide_pid = cursor;
                 let key = (origin.clone(), pid, start_ticks.clone(), ide_pid);
-                obs.push((key, HistoricalRecord {
-                    provider: name.clone(),
-                    pid,
-                    start_ticks: start_ticks.clone(),
-                    ide_pid,
-                    cwd: cwd.clone(),
-                    terminal: terminal.clone(),
-                    first_snapshot: dir_name.to_string(),
-                    last_snapshot: dir_name.to_string(),
-                    observations: 1,
-                }));
+                obs.push((
+                    key,
+                    HistoricalRecord {
+                        provider: name.clone(),
+                        pid,
+                        start_ticks: start_ticks.clone(),
+                        ide_pid,
+                        cwd: cwd.clone(),
+                        terminal: terminal.clone(),
+                        first_snapshot: dir_name.to_string(),
+                        last_snapshot: dir_name.to_string(),
+                        observations: 1,
+                    },
+                ));
             }
         }
     }
@@ -1380,23 +1586,16 @@ fn process_health_dir(root: &Path, dir_name: &str, now_ts: f64) -> Result<Proces
 
 fn snapshot_health(state_dir: &Path, interval: u64, now_ts: f64) -> Result<String, ()> {
     let root = state_dir.join("snapshots");
-    if let Ok(meta) = fs::symlink_metadata(&root) {
-        if meta.file_type().is_symlink() || !meta.is_dir() {
-            return Ok("{\"verified_plain_manifests\":0,\"invalid_manifests\":0,\"latest_snapshot\":null,\"age_seconds\":null,\"stale\":true,\"freshness\":\"verified-plaintext-manifest\",\"stale_threshold_seconds\":600,\"payload_hashes_verified\":false,\"encrypted_manifests\":\"not-inspected\",\"encrypted_manifest_count\":0,\"historical_ide_provider_observations\":[]}".to_string());
-        }
-    } else {
-        return Ok("{\"verified_plain_manifests\":0,\"invalid_manifests\":0,\"latest_snapshot\":null,\"age_seconds\":null,\"stale\":true,\"freshness\":\"verified-plaintext-manifest\",\"stale_threshold_seconds\":600,\"payload_hashes_verified\":false,\"encrypted_manifests\":\"not-inspected\",\"encrypted_manifest_count\":0,\"historical_ide_provider_observations\":[]}".to_string());
-    }
-
-    let entries = match fs::read_dir(&root) {
-        Ok(e) => e,
+    let _root_guard = match open(&root, DIRECTORY) {
+        Ok(f) => Some(f),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
         Err(_) => return Err(()),
     };
-
+    let entries = fs::read_dir(&root).ok();
     let mut dir_names: Vec<String> = Vec::new();
     let mut encrypted = Vec::new();
 
-    for entry in entries {
+    for entry in entries.into_iter().flatten() {
         if let Ok(e) = entry {
             let name = e.file_name().to_string_lossy().to_string();
             if !name.starts_with('.') {
@@ -1414,7 +1613,7 @@ fn snapshot_health(state_dir: &Path, interval: u64, now_ts: f64) -> Result<Strin
     dir_names.sort();
 
     let num_threads = 8.min(dir_names.len().max(1));
-    let chunk_size = (dir_names.len() + num_threads - 1) / num_threads;
+    let chunk_size = dir_names.len().div_ceil(num_threads).max(1);
 
     let root_arc = Arc::new(root);
     let mut handles = Vec::new();
@@ -1434,15 +1633,21 @@ fn snapshot_health(state_dir: &Path, interval: u64, now_ts: f64) -> Result<Strin
 
     let mut snapshots: Vec<(f64, String)> = Vec::new();
     let mut invalid = 0usize;
-    let mut historical: HashMap<(Option<String>, i64, String, i64), HistoricalRecord> = HashMap::new();
+    let mut historical_order = Vec::new();
+    let mut historical: HashMap<(Option<String>, i64, String, i64), HistoricalRecord> =
+        HashMap::new();
 
     for handle in handles {
-        if let Ok(results) = handle.join() {
+        let results = handle.join().map_err(|_| ())?;
+        {
             for (_name, res) in results {
                 match res {
                     Ok(p) => {
                         snapshots.push((p.created_ts, p.dir_name));
                         for (key, rec) in p.obs {
+                            if !historical.contains_key(&key) {
+                                historical_order.push(key.clone());
+                            }
                             let entry = historical.entry(key).or_insert_with(|| HistoricalRecord {
                                 provider: rec.provider,
                                 pid: rec.pid,
@@ -1458,7 +1663,8 @@ fn snapshot_health(state_dir: &Path, interval: u64, now_ts: f64) -> Result<Strin
                             entry.observations += 1;
                         }
                     }
-                    Err(_) => {
+                    Err(true) => return Err(()),
+                    Err(false) => {
                         invalid += 1;
                     }
                 }
@@ -1467,15 +1673,21 @@ fn snapshot_health(state_dir: &Path, interval: u64, now_ts: f64) -> Result<Strin
     }
 
     let newest = snapshots.iter().max_by(|a, b| {
-        a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.1.cmp(&b.1))
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.cmp(&b.1))
     });
     let age = newest.map(|n| now_ts - n.0);
+    if age.is_some_and(|a| ((a * 10.0).fract().abs() - 0.5).abs() < 0.000005) {
+        return Err(()); // Python owns decimal rounding at binary floating-point ties.
+    }
     let max_encrypted = encrypted.iter().max();
-    let newer_encrypted = !encrypted.is_empty() && match (max_encrypted, newest) {
-        (Some(_e), None) => true,
-        (Some(e), Some(n)) => e.as_str() > n.1.as_str(),
-        _ => false,
-    };
+    let newer_encrypted = !encrypted.is_empty()
+        && match (max_encrypted, newest) {
+            (Some(_e), None) => true,
+            (Some(e), Some(n)) => e.as_str() > n.1.as_str(),
+            _ => false,
+        };
     let stale = if newer_encrypted {
         "null".to_string()
     } else if let Some(a) = age {
@@ -1500,7 +1712,8 @@ fn snapshot_health(state_dir: &Path, interval: u64, now_ts: f64) -> Result<Strin
     };
 
     let mut hist_list = Vec::new();
-    for rec in historical.values() {
+    for key in historical_order {
+        let rec = &historical[&key];
         let cwd_str = match &rec.cwd {
             Some(c) => format!("\"{}\"", json_escape(c)),
             None => "null".to_string(),
@@ -1547,7 +1760,7 @@ struct SnapshotSummary {
     error: Option<String>,
 }
 
-fn process_preview_dir(root: &Path, dir_name: &str) -> SnapshotSummary {
+fn process_preview_dir(root: &Path, dir_name: &str, origin: &str) -> SnapshotSummary {
     let dir_path = root.join(dir_name);
     let manifest_path = dir_path.join("manifest.json");
     let sha_path = dir_path.join("manifest.sha256");
@@ -1561,33 +1774,20 @@ fn process_preview_dir(root: &Path, dir_name: &str) -> SnapshotSummary {
         error: Some("unreadable".to_string()),
     };
 
-    let c_path = match CString::new(manifest_path.as_os_str().as_bytes()) {
-        Ok(c) => c,
+    let raw = match read_regular(&manifest_path, 32 * 1024 * 1024) {
+        Ok(v) => v,
         Err(_) => return err_unreadable(),
     };
-    let fd = unsafe { openat(-100, c_path.as_ptr(), 0 | NOFOLLOW | CLOEXEC) };
-    if fd < 0 {
-        return err_unreadable();
-    }
-    let mut file = unsafe { File::from_raw_fd(fd) };
-    let meta = match file.metadata() {
-        Ok(m) => m,
-        Err(_) => return err_unreadable(),
-    };
-    if !meta.is_file() || meta.len() > 32 * 1024 * 1024 {
-        return err_unreadable();
-    }
-    let mut raw = Vec::with_capacity(meta.len() as usize);
-    if file.read_to_end(&mut raw).is_err() {
-        return err_unreadable();
-    }
-
     let calc_hash = match sha256_digest(&raw) {
         Some(h) => h,
         None => return err_unreadable(),
     };
-    let expected_hash = match fs::read_to_string(&sha_path) {
-        Ok(s) => s.trim().to_lowercase(),
+    let hash_bytes = match read_regular(&sha_path, 4096) {
+        Ok(v) => v,
+        Err(_) => return err_unreadable(),
+    };
+    let expected_hash = match std::str::from_utf8(&hash_bytes) {
+        Ok(v) => v,
         Err(_) => return err_unreadable(),
     };
     if calc_hash != expected_hash {
@@ -1595,17 +1795,121 @@ fn process_preview_dir(root: &Path, dir_name: &str) -> SnapshotSummary {
     }
 
     let raw_str = match std::str::from_utf8(&raw) {
-        Ok(s) => s,
+        Ok(s) => s.strip_prefix('\u{feff}').unwrap_or(s),
         Err(_) => return err_unreadable(),
     };
     let mut parser = JsonParser::new(raw_str);
     let data = match parser.parse_manifest_preview() {
         Some(d) => d,
+        None if parser.unsupported => {
+            let mut e = err_unreadable();
+            e.error = Some("fallback".to_string());
+            return e;
+        }
         None => return err_unreadable(),
     };
-
-    let id = data.get("id").and_then(|v| v.as_str()).unwrap_or(dir_name).to_string();
-    let created_at = data.get("created_at").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let mut fallback = err_unreadable();
+    fallback.error = Some("fallback".to_string());
+    // Delegate shapes outside the captured metadata contract to Python.
+    if let Some(profiles) = data.get("profiles") {
+        let profiles = match profiles.as_array() {
+            Some(v) => v,
+            None => return fallback,
+        };
+        if profiles.iter().any(|p| {
+            matches!(p, JsonValue::Object(_)) && p.get("id").and_then(|v| v.as_str()).is_none()
+        }) {
+            return fallback;
+        }
+    }
+    for (container, array) in [("session_hosts", "processes"), ("jetbrains", "descendants")] {
+        if let Some(parent) = data.get(container) {
+            if !matches!(parent, JsonValue::Object(_)) {
+                return fallback;
+            }
+            if let Some(rows) = parent.get(array) {
+                let rows = match rows.as_array() {
+                    Some(r) => r,
+                    None => return fallback,
+                };
+                for row in rows {
+                    if !matches!(row, JsonValue::Object(_)) {
+                        continue;
+                    }
+                    for field in ["provider", "terminal", "cwd"] {
+                        if row
+                            .get(field)
+                            .is_some_and(|v| !matches!(v, JsonValue::Null | JsonValue::String(_)))
+                        {
+                            return fallback;
+                        }
+                    }
+                    for field in ["role", "name"] {
+                        if row
+                            .get(field)
+                            .is_some_and(|v| !matches!(v, JsonValue::String(_)))
+                        {
+                            return fallback;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(jb) = data.get("jetbrains") {
+        for field in ["open_projects", "closed_projects"] {
+            if let Some(projects) = jb.get(field) {
+                let projects = match projects.as_array() {
+                    Some(p) => p,
+                    None => return fallback,
+                };
+                if projects.iter().any(|v| !matches!(v, JsonValue::String(_))) {
+                    return fallback;
+                }
+            }
+        }
+    }
+    if std::env::var("HOME").is_err() {
+        return fallback;
+    }
+    let bytes = dir_name.as_bytes();
+    if bytes.len() != 34
+        || bytes[8] != b'T'
+        || bytes[21] != b'-'
+        || !bytes[..8]
+            .iter()
+            .chain(bytes[9..21].iter())
+            .all(|b| b.is_ascii_digit())
+        || !bytes[22..]
+            .iter()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(b))
+    {
+        return err_unreadable();
+    }
+    if data.get("schema").and_then(|v| v.as_str()) != Some("uncrash.snapshot/v1")
+        || data.get("id").and_then(|v| v.as_str()) != Some(dir_name)
+    {
+        return err_unreadable();
+    }
+    if let Some(enc) = data.get("encryption").and_then(|v| v.as_str()) {
+        if enc != "none" {
+            return err_unreadable();
+        }
+    }
+    if let Some(o) = data.get("origin").and_then(|v| v.as_str()) {
+        if !origin.is_empty() && o != origin {
+            return err_unreadable();
+        }
+    }
+    let id = data
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or(dir_name)
+        .to_string();
+    let created_at = data
+        .get("created_at")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     let mut profiles = Vec::new();
     if let Some(profs) = data.get("profiles").and_then(|v| v.as_array()) {
@@ -1623,14 +1927,23 @@ fn process_preview_dir(root: &Path, dir_name: &str) -> SnapshotSummary {
                 let role = p.get("role").and_then(|v| v.as_str()).unwrap_or("unknown");
                 let provider = p.get("provider").and_then(|v| v.as_str());
                 let terminal = p.get("terminal").and_then(|v| v.as_str());
-                let cwd = p.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
+                let home = std::env::var("HOME").unwrap_or_default();
+                let cwd = p
+                    .get("cwd")
+                    .and_then(|v| v.as_str())
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or(&home);
                 let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("terminal");
 
                 let is_client = (role == "client" || role == "unknown")
-                    && (terminal.is_some() || matches!(provider, Some("codex") | Some("agy") | Some("claude")));
+                    && (terminal.is_some_and(|s| !s.is_empty())
+                        || matches!(provider, Some("codex") | Some("agy") | Some("claude")));
                 if is_client {
                     let tab_key = (
-                        provider.unwrap_or(name).to_string(),
+                        provider
+                            .filter(|v| !v.is_empty())
+                            .unwrap_or(name)
+                            .to_string(),
                         cwd.to_string(),
                         terminal.map(|s| s.to_string()),
                     );
@@ -1643,8 +1956,14 @@ fn process_preview_dir(root: &Path, dir_name: &str) -> SnapshotSummary {
     if let Some(jb) = data.get("jetbrains") {
         if let Some(descendants) = jb.get("descendants").and_then(|v| v.as_array()) {
             for d in descendants {
-                let term = d.get("terminal").and_then(|v| v.as_str());
-                let cwd = d.get("cwd").and_then(|v| v.as_str());
+                let term = d
+                    .get("terminal")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty());
+                let cwd = d
+                    .get("cwd")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty());
                 if let (Some(term), Some(cwd)) = (term, cwd) {
                     let tab_key = (
                         "jetbrains-terminal".to_string(),
@@ -1687,8 +2006,13 @@ fn process_preview_dir(root: &Path, dir_name: &str) -> SnapshotSummary {
     }
 }
 
-fn list_snapshots(state_dir: &Path) -> Result<String, ()> {
+fn list_snapshots(state_dir: &Path, origin: &str) -> Result<String, ()> {
     let root = state_dir.join("snapshots");
+    let _root_guard = match open(&root, DIRECTORY) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok("[]".to_string()),
+        Err(_) => return Err(()),
+    };
     let entries = match fs::read_dir(&root) {
         Ok(e) => e,
         Err(_) => return Ok("[]".to_string()),
@@ -1702,8 +2026,12 @@ fn list_snapshots(state_dir: &Path) -> Result<String, ()> {
                 let dir_p = root.join(&name);
                 if dir_p.is_dir() {
                     let has_enc = dir_p.join("manifest.enc").is_file();
-                    let has_json = dir_p.join("manifest.json").is_file() && dir_p.join("manifest.sha256").is_file();
-                    if has_enc || has_json {
+                    let has_json = dir_p.join("manifest.json").is_file()
+                        && dir_p.join("manifest.sha256").is_file();
+                    if has_enc {
+                        return Err(());
+                    } // Python owns authenticated decryption.
+                    if has_json {
                         valid_dirs.push(name);
                     }
                 }
@@ -1714,7 +2042,7 @@ fn list_snapshots(state_dir: &Path) -> Result<String, ()> {
     valid_dirs.reverse();
 
     let num_threads = 8.min(valid_dirs.len().max(1));
-    let chunk_size = (valid_dirs.len() + num_threads - 1) / num_threads;
+    let chunk_size = valid_dirs.len().div_ceil(num_threads).max(1);
 
     let root_arc = Arc::new(root);
     let mut handles = Vec::new();
@@ -1722,6 +2050,7 @@ fn list_snapshots(state_dir: &Path) -> Result<String, ()> {
     for chunk in valid_dirs.chunks(chunk_size) {
         let chunk_vec = chunk.to_vec();
         let r_arc = root_arc.clone();
+        let origin = origin.to_string();
         handles.push(thread::spawn(move || {
             let mut results = Vec::new();
             for name in chunk_vec {
@@ -1736,7 +2065,7 @@ fn list_snapshots(state_dir: &Path) -> Result<String, ()> {
                         error: Some("unreadable".to_string()),
                     });
                 } else {
-                    results.push(process_preview_dir(&r_arc, &name));
+                    results.push(process_preview_dir(&r_arc, &name, &origin));
                 }
             }
             results
@@ -1745,7 +2074,8 @@ fn list_snapshots(state_dir: &Path) -> Result<String, ()> {
 
     let mut all_summaries = Vec::new();
     for handle in handles {
-        if let Ok(results) = handle.join() {
+        let results = handle.join().map_err(|_| ())?;
+        {
             all_summaries.extend(results);
         }
     }
@@ -1753,13 +2083,20 @@ fn list_snapshots(state_dir: &Path) -> Result<String, ()> {
     let mut json_items = Vec::new();
     for s in all_summaries {
         if let Some(err) = s.error {
+            if err == "fallback" {
+                return Err(());
+            }
             json_items.push(format!(
                 "{{\"id\":\"{}\",\"error\":\"{}\"}}",
                 json_escape(&s.id),
                 json_escape(&err)
             ));
         } else {
-            let prof_json: Vec<String> = s.profiles.iter().map(|p| format!("\"{}\"", json_escape(p))).collect();
+            let prof_json: Vec<String> = s
+                .profiles
+                .iter()
+                .map(|p| format!("\"{}\"", json_escape(p)))
+                .collect();
             let created_json = match &s.created_at {
                 Some(c) => format!("\"{}\"", json_escape(c)),
                 None => "null".to_string(),
@@ -1784,17 +2121,13 @@ fn run_snapshot_health(args: &[String]) -> io::Result<()> {
     }
     let state_dir = Path::new(&args[0]);
     let interval: u64 = if args.len() > 1 {
-        args[1].parse().unwrap_or(300)
+        args[1].parse().map_err(|_| fail())?
     } else {
         300
     };
+    interval.checked_mul(2).ok_or_else(fail)?;
     let now_ts = if args.len() > 2 {
-        parse_iso_datetime(&args[2]).unwrap_or_else(|| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs_f64()
-        })
+        parse_iso_datetime(&args[2]).ok_or_else(fail)?
     } else {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1815,7 +2148,8 @@ fn run_list_snapshots(args: &[String]) -> io::Result<()> {
         return Err(fail());
     }
     let state_dir = Path::new(&args[0]);
-    match list_snapshots(state_dir) {
+    let origin = args.get(1).ok_or_else(fail)?;
+    match list_snapshots(state_dir, origin) {
         Ok(json) => {
             println!("{json}");
             Ok(())
@@ -1926,4 +2260,3 @@ fn main() -> io::Result<()> {
     }
     Ok(())
 }
-

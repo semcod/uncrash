@@ -10,13 +10,11 @@ from pathlib import Path
 import re
 import sqlite3
 import stat
-import shutil
 import subprocess
-import tempfile
 import time
 from urllib.parse import quote
 
-from .store import RecoveryError, build_native, find_native_worker, no_links, write_file
+from .store import RecoveryError, find_native_worker, no_links, write_file
 
 
 PROVIDERS = {'codex', 'claude', 'agy'}
@@ -33,12 +31,19 @@ def _stat(path):
             'session_id': int(fields[3]), 'tty_nr': int(fields[4])}
 
 
-def _read_json(path, maximum=32 * 1024**2):
-    path = no_links(path)
-    with path.open('rb') as stream:
+def _read_regular_bytes(path, maximum):
+    fd = os.open(no_links(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError('metadata is not a regular file')
         raw = stream.read(maximum + 1)
     if len(raw) > maximum:
         raise ValueError('metadata limit exceeded')
+    return raw
+
+
+def _read_json(path, maximum=32 * 1024**2):
+    raw = _read_regular_bytes(path, maximum)
     return json.loads(raw), raw
 
 
@@ -158,13 +163,11 @@ def native_scan_agent_log_panics(log_dir: Path, max_files: int = 20, state_root:
     """Attempt fast native Rust scan of agent logs; returns None if native worker is unavailable."""
     if not isinstance(max_files, int) or not 1 <= max_files <= 100:
         raise ValueError('Log file budget must be between 1 and 100')
+    try:
+        log_dir = no_links(log_dir)
+    except (OSError, RecoveryError):
+        return []
     binary = find_native_worker(state_root)
-    if binary is None and shutil.which('rustc'):
-        try:
-            target_root = state_root or (Path(tempfile.gettempdir()) / f'uncrash-{os.getuid()}')
-            binary = build_native(target_root)
-        except (RecoveryError, OSError):
-            binary = None
     if binary is None:
         return None
     try:
@@ -349,14 +352,12 @@ def provider_inventory(home, check_integrity=False):
 
 
 def native_snapshot_health(state: Path, interval: int = 300, now: datetime = None, state_root: Path = None) -> dict | None:
-    """Attempt fast native Rust manifest verification and snapshot health audit; returns None on fallback."""
-    binary = find_native_worker(state_root)
-    if binary is None and shutil.which('rustc'):
-        try:
-            target_root = state_root or (Path(tempfile.gettempdir()) / f'uncrash-{os.getuid()}')
-            binary = build_native(target_root)
-        except (RecoveryError, OSError):
-            binary = None
+    """Attempt cached native verification; unsupported or unavailable workers use Python."""
+    try:
+        state = no_links(state)
+    except (OSError, RecoveryError):
+        return None
+    binary = find_native_worker(state_root or state)
     if binary is None:
         return None
     try:
@@ -397,7 +398,7 @@ def snapshot_health(state, interval=300, now=None):
             continue  # Encrypted copies need an explicit key-aware audit.
         try:
             data, raw = _read_json(manifest)
-            if hashlib.sha256(raw).hexdigest() != no_links(directory / 'manifest.sha256').read_text().strip():
+            if hashlib.sha256(raw).hexdigest() != _read_regular_bytes(directory / 'manifest.sha256', 4096).decode().strip():
                 raise ValueError('checksum mismatch')
             if data.get('schema') != 'uncrash.snapshot/v1' or data.get('id') != directory.name:
                 raise ValueError('manifest identity mismatch')
