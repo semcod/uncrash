@@ -191,7 +191,7 @@ def create_fastapi_app(store=None, config=None):
     class CloseAppRequest(BaseModel):
         pid: Optional[int] = None
         name: Optional[str] = None
-        force: bool = False
+        force: StrictBool = False
         expected_start: Optional[str] = None
         entire_process: StrictBool = False
 
@@ -405,6 +405,8 @@ def create_fastapi_app(store=None, config=None):
 
 def create_mcp_server(store=None, config=None):
     """Create Model Context Protocol (MCP) server for uncrash."""
+    from pydantic import StrictBool
+
     resolved_store, resolved_config = _resolve_default_store(store, config)
 
     try:
@@ -465,10 +467,6 @@ def create_mcp_server(store=None, config=None):
         except RecoveryError as exc:
             raise ToolError(str(exc)) from exc
 
-    @mcp.tool(
-        name="uncrash_close_gui_app",
-        description="Close ALL windows of an explicit application PID/expected_start. Requires entire_process=true; force is a separate opt-in."
-    )
     def mcp_close_gui_app(pid: Optional[int] = None, name: Optional[str] = None, force: bool = False, expected_start: Optional[str] = None, entire_process: bool = False) -> str:
         try:
             require_process_consent(entire_process)
@@ -476,6 +474,14 @@ def create_mcp_server(store=None, config=None):
             raise ToolError(str(exc)) from exc
         res = close_gui_app(pid=pid, name=name, force=force, expected_start=expected_start)
         return json.dumps(res, ensure_ascii=False, indent=2)
+
+    # Bind actual types before either MCP backend resolves postponed annotations.
+    # Coercing 1 or "yes" to True would bypass the literal consent boundary.
+    mcp_close_gui_app.__annotations__.update(force=StrictBool, entire_process=StrictBool)
+    mcp.tool(
+        name="uncrash_close_gui_app",
+        description="Close ALL windows of an explicit application PID/expected_start. Requires entire_process=true; force is a separate opt-in. Both flags require literal JSON booleans."
+    )(mcp_close_gui_app)
 
     @mcp.tool(
         name="uncrash_get_jetbrains_state",

@@ -18,6 +18,8 @@ Prevention continuation (PLF-13803): SESSION_EXECUTION_AUTHORIZATION on 2026-10-
 
 Restore-gate continuation: SESSION_EXECUTION_AUTHORIZATION from the user's next continuation covers connecting the risk check to explicit PyCharm restore and making this tested local CLI available. Keep this in the existing owned scope. Local inspection found the user launcher pointing at Twinerd with an editable source path to an absent ticket-007 checkout. Prepare a versioned per-user CLI installation, preserve the original symlink for rollback, verify the exact committed source, and replace only that launcher by CAS. Do not edit the shared environment, restart the daemon, change IDE settings, terminate processes, push or merge. Planfile synchronization is retained in the external outbox because the adapter session is terminated.
 
+Strict-flag continuation: SESSION_EXECUTION_AUTHORIZATION from "kontynuuj, testuj, poprawiaj" covers testing and correcting the existing process-close safety boundary. Read-only mock probes reproduced MCP coercion of 1, "true" and "yes" into whole-process consent. Require literal JSON booleans for consent and force through both MCP and REST; retain positive explicit-boolean behavior and reject malformed flags before any close function call. The shared live PyCharm PID remains protected, and the separate proposed two-window restart still awaits explicit authority. Preserve the request in the PLF-13803 external outbox while its adapter session is terminated.
+
 ## Acceptance criteria
 
 - [x] AC-01: close-app, apps --close and pycharm close require --entire-process independently of --force; REST/MCP require entire_process=true. Missing consent never reaches the signal function. Dry-run remains read-only and reports the whole-process scope.
@@ -30,7 +32,8 @@ Restore-gate continuation: SESSION_EXECUTION_AUTHORIZATION from the user's next 
 - [x] AC-07: Regression tests cover incident counts, coroutine duplicates, stale/missing/malformed/oversized evidence, unsafe paths, process identity and exclusion boundaries; full stack and managed governance pass.
 
 - [x] AC-08: Explicit pycharm restore --preflight blocks all restore calls on warning/critical/unknown evidence; bounded saved-dump discovery avoids JVM attach and has quota/symlink/freshness tests.
-- [ ] AC-09: A versioned user CLI installation from exact committed source supports doctor and refusal of unconsented close; original launcher and daemon process/config are preserved.
+- [x] AC-09: A versioned user CLI installation from exact committed source supports doctor and refusal of unconsented close; original launcher and daemon process/config are preserved.
+- [x] AC-10: MCP and REST reject non-boolean process-close consent and force without calling recovery; explicit JSON booleans still work on both supported MCP backends.
 
 ## Validation and remaining work
 
@@ -58,7 +61,13 @@ Doctor can now select the newest saved IDE thread dump when --log-dir is given a
 
 After local installation, run `uncrash doctor --log-dir ~/.cache/JetBrains/PyCharm2026.2/log --project . --preflight`. To gate an explicit restore, use `uncrash pycharm restore --project /path/to/project --log-dir /path/to/IDE/log --preflight`. --preflight requires a known project, cannot combine with close, and returns 1/2/3 before any restore call on warning/critical/unknown evidence. Direct desktop launches and restores without this flag remain outside this gate.
 
-AC-09 is pending the post-commit local effect. The installer will bind the committed head and source digests, use a private per-release venv with existing base-system dependencies, and atomically replace the observed per-user uncrash symlink. Preserve its original target for rollback. Do not change Twinerd, the running snapshot daemon, IDE processes/settings, Docker, remote branches or PRs. Completion and rollback bindings belong in the external installation/delivery receipt; create no carrier-only closure commit.
+AC-09 was completed by the external installation receipt for faacaf7dbb6229b6c5fa7a15b4728cb8b02b667b. The versioned release binds committed source digests, uses a private per-release venv with existing base-system dependencies, and replaced only the observed per-user uncrash symlink. The original target remains available for rollback. Twinerd, the running snapshot daemon, IDE processes/settings, Docker, remote branches and PRs were preserved. Completion and rollback bindings remain in the external installation/delivery receipt; create no carrier-only closure commit.
+
+## Strict process-close flag validation
+
+Mock transport probes reproduced whole-process consent from 1, "true" and "yes" in MCP. The regression matrix failed 24 cases before the fix. MCP consent and force now use actual StrictBool annotations bound before tool registration on both supported backends; REST force uses the same strict boolean model as its consent field. Numeric, string, null, array and object values are rejected before recovery. Explicit boolean consent and both boolean force values retain their behavior. No live process signals were sent.
+
+The full base-runtime suite passed 213 tests with 9 opt-in skips, including the owned Xvfb/Openbox fixture that closes one of four shared-PID windows and preserves three. The focused Twinerd-runtime suite passed 129 tests with one python-xlib skip, covering the alternative MCP backend. The follow-up local release will be installed from this material commit under the existing user-CLI authorization, preserving its preceding version for rollback. The separate proposal to restart the user's shared two-window IDE remains pending explicit authorization.
 
 ## Tracking boundary
 

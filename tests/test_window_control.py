@@ -173,7 +173,8 @@ def test_rest_requires_whole_process_consent(monkeypatch, tmp_path, force):
     assert len(calls) == 1 and calls[0]['expected_start'] == '456'
 
 
-def test_mcp_requires_consent_even_with_force(monkeypatch, tmp_path):
+@pytest.mark.parametrize('force', [False, True])
+def test_mcp_requires_consent_independently_of_force(monkeypatch, tmp_path, force):
     from uncrash import api
     from uncrash.store import Store
     calls = []
@@ -184,7 +185,7 @@ def test_mcp_requires_consent_even_with_force(monkeypatch, tmp_path):
         tool = next(t for t in tools if t.name == 'uncrash_close_gui_app')
         schema = getattr(tool, 'inputSchema', None) or tool.input_schema
         assert schema['properties']['entire_process']['default'] is False
-        body = {'pid': 123, 'expected_start': '456', 'force': True}
+        body = {'pid': 123, 'expected_start': '456', 'force': force}
         try:
             refused = await server.call_tool('uncrash_close_gui_app', body)
         except Exception as exc:
@@ -194,6 +195,46 @@ def test_mcp_requires_consent_even_with_force(monkeypatch, tmp_path):
         assert not calls
         await server.call_tool('uncrash_close_gui_app', {**body, 'entire_process': True})
         assert len(calls) == 1 and calls[0]['pid'] == 123
+    asyncio.run(exercise())
+
+
+NON_BOOLEAN_FLAGS = [0, 1, 0.0, 1.0, 'true', 'false', 'yes', 'no', None, [], {}]
+
+
+@pytest.mark.parametrize('field', ['entire_process', 'force'])
+@pytest.mark.parametrize('value', NON_BOOLEAN_FLAGS)
+def test_rest_rejects_coerced_process_close_flags(monkeypatch, tmp_path, field, value):
+    from fastapi.testclient import TestClient
+    from uncrash import api
+    from uncrash.store import Store
+    calls = []
+    monkeypatch.setattr(api, 'close_gui_app', lambda **kw: calls.append(kw) or {'status': 'fixture'})
+    client = TestClient(api.create_fastapi_app(Store(tmp_path / 'store'), {'profiles': []}))
+    body = {'pid': 123, 'expected_start': '456', 'entire_process': True, 'force': True, field: value}
+    result = client.post('/api/v1/apps/close', json=body)
+    assert result.status_code == 422
+    assert any(error['loc'][-1] == field for error in result.json()['detail'])
+    assert calls == []
+
+
+@pytest.mark.parametrize('field', ['entire_process', 'force'])
+@pytest.mark.parametrize('value', NON_BOOLEAN_FLAGS)
+def test_mcp_rejects_coerced_process_close_flags(monkeypatch, tmp_path, field, value):
+    from uncrash import api
+    from uncrash.store import Store
+    calls = []
+    monkeypatch.setattr(api, 'close_gui_app', lambda **kw: calls.append(kw) or {'status': 'fixture'})
+    server = api.create_mcp_server(Store(tmp_path / 'store'), {'profiles': []})
+    async def exercise():
+        body = {'pid': 123, 'expected_start': '456', 'entire_process': True, 'force': True, field: value}
+        try:
+            result = await server.call_tool('uncrash_close_gui_app', body)
+        except Exception as exc:
+            error = str(exc)
+        else:
+            error = str(result.content)
+        assert calls == []
+        assert field in error and ('bool' in error.lower() or 'validation' in error.lower())
     asyncio.run(exercise())
 
 
