@@ -54,7 +54,8 @@
       "extends": ["runtime-service"],
       "requirements": [
         {"id": "wellmanifest/repair-lifecycle", "minimumLevel": "S5"},
-        {"id": "wellmanifest/validation-attestation", "minimumLevel": "S5"}
+        {"id": "wellmanifest/validation-attestation", "minimumLevel": "S5"},
+        {"id": "wellmanifest/session-recovery", "minimumLevel": "S3"}
       ]
     },
     "deployment": {
@@ -93,6 +94,7 @@
     {"id": "wellmanifest/code-dsl", "owns": ["code-level semantic query contract", "AST diagnostics model"]},
     {"id": "wellmanifest/nl-dsl-llm", "owns": ["tripartite natural-language, canonical DSL, and adaptive LLM contract", "universal MCP/CLI parity"]},
     {"id": "wellmanifest/repair-lifecycle", "owns": ["repair and remediation lifecycle"]},
-    {"id": "wellmanifest/deployment", "owns": ["deployment contract", "deployment verification"]}
+    {"id": "wellmanifest/deployment", "owns": ["deployment contract", "deployment verification"]},
+    {"id": "wellmanifest/session-recovery", "owns": ["LLM session recovery", "conversation storage resilience", "host resumption protocol", "session crash isolation", "state rehydration"]}
   ]
 }

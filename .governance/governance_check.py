@@ -20,6 +20,14 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+try:  # Python 3.11+
+    import tomllib
+except ImportError:
+    try:
+        import tomli as tomllib  # type: ignore[no-redef]
+    except ImportError:
+        tomllib = None  # type: ignore[assignment]
+
 # Managed validators are read-only checks. Importing adjacent managed modules
 # must not create `__pycache__` inside the repository and turn a clean checkout
 # into an implementation diff on the next validation pass.
@@ -2795,6 +2803,166 @@ def check_required_files(root: Path, manifest: dict[str, Any], report: Report) -
             )
 
 
+def _extract_pyproject_version(content: str) -> str | None:
+    if tomllib is not None:
+        try:
+            data = tomllib.loads(content)
+            project = data.get("project", {})
+            if isinstance(project, dict) and "version" in project and isinstance(project["version"], str):
+                return project["version"].strip()
+            poetry = data.get("tool", {}).get("poetry", {})
+            if isinstance(poetry, dict) and "version" in poetry and isinstance(poetry["version"], str):
+                return poetry["version"].strip()
+            flit = data.get("tool", {}).get("flit", {}).get("metadata", {})
+            if isinstance(flit, dict) and "version" in flit and isinstance(flit["version"], str):
+                return flit["version"].strip()
+        except Exception:
+            pass
+    m = re.search(r'^\s*version\s*=\s*["\']([^"\']+)["\']', content, re.MULTILINE)
+    return m.group(1).strip() if m else None
+
+
+def _extract_setup_py_version(content: str) -> str | None:
+    m = re.search(r'^\s*version\s*=\s*["\']([^"\']+)["\']', content, re.MULTILINE)
+    if m:
+        return m.group(1).strip()
+    m2 = re.search(r'\bversion\s*=\s*["\']([^"\']+)["\']', content)
+    return m2.group(1).strip() if m2 else None
+
+
+def _extract_cargo_version(content: str) -> str | None:
+    if tomllib is not None:
+        try:
+            data = tomllib.loads(content)
+            pkg = data.get("package", {})
+            if isinstance(pkg, dict) and "version" in pkg and isinstance(pkg["version"], str):
+                return pkg["version"].strip()
+        except Exception:
+            pass
+    m = re.search(r'^\s*version\s*=\s*["\']([^"\']+)["\']', content, re.MULTILINE)
+    return m.group(1).strip() if m else None
+
+
+def check_version_parity(root: Path, manifest: dict[str, Any], report: Report) -> None:
+    try:
+        version_path = safe_repo_path(root, "VERSION")
+    except ValueError:
+        return
+    if not version_path.is_file():
+        return
+
+    try:
+        raw_version = version_path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        report.add(
+            "GOV-VERSION-001",
+            "Authoritative VERSION file is unreadable or contains invalid encoding.",
+            "Ensure VERSION is an accessible UTF-8 file declaring a valid plain version.",
+            ["VERSION"],
+        )
+        return
+
+    if not raw_version:
+        report.add(
+            "GOV-VERSION-001",
+            "Authoritative VERSION file is empty.",
+            "Declare a valid semantic or plain version in VERSION.",
+            ["VERSION"],
+        )
+        return
+
+    # 1. pyproject.toml
+    try:
+        pyproject_path = safe_repo_path(root, "pyproject.toml")
+        if pyproject_path.is_file():
+            content = pyproject_path.read_text(encoding="utf-8")
+            pyproject_version = _extract_pyproject_version(content)
+            if pyproject_version and pyproject_version != raw_version:
+                report.add(
+                    "GOV-VERSION-001",
+                    f"Declared pyproject.toml version '{pyproject_version}' does not match authoritative VERSION '{raw_version}'.",
+                    "Synchronize pyproject.toml version with the VERSION file.",
+                    ["pyproject.toml", "VERSION"],
+                )
+    except (OSError, UnicodeDecodeError, ValueError):
+        pass
+
+    # 2. setup.py
+    try:
+        setup_path = safe_repo_path(root, "setup.py")
+        if setup_path.is_file():
+            content = setup_path.read_text(encoding="utf-8")
+            setup_version = _extract_setup_py_version(content)
+            if setup_version and setup_version != raw_version:
+                report.add(
+                    "GOV-VERSION-001",
+                    f"Declared setup.py version '{setup_version}' does not match authoritative VERSION '{raw_version}'.",
+                    "Synchronize setup.py version with the VERSION file or read VERSION dynamically.",
+                    ["setup.py", "VERSION"],
+                )
+    except (OSError, UnicodeDecodeError, ValueError):
+        pass
+
+    # 3. package.json
+    try:
+        package_json_path = safe_repo_path(root, "package.json")
+        if package_json_path.is_file():
+            pkg_data = json.loads(package_json_path.read_text(encoding="utf-8"))
+            if isinstance(pkg_data, dict) and "version" in pkg_data:
+                pkg_version = str(pkg_data["version"]).strip()
+                if pkg_version and pkg_version != raw_version:
+                    report.add(
+                        "GOV-VERSION-001",
+                        f"Declared package.json version '{pkg_version}' does not match authoritative VERSION '{raw_version}'.",
+                        "Synchronize package.json version with the VERSION file.",
+                        ["package.json", "VERSION"],
+                    )
+    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        pass
+
+    # 4. Cargo.toml
+    try:
+        cargo_path = safe_repo_path(root, "Cargo.toml")
+        if cargo_path.is_file():
+            content = cargo_path.read_text(encoding="utf-8")
+            cargo_version = _extract_cargo_version(content)
+            if cargo_version and cargo_version != raw_version:
+                report.add(
+                    "GOV-VERSION-001",
+                    f"Declared Cargo.toml version '{cargo_version}' does not match authoritative VERSION '{raw_version}'.",
+                    "Synchronize Cargo.toml version with the VERSION file.",
+                    ["Cargo.toml", "VERSION"],
+                )
+    except (OSError, UnicodeDecodeError, ValueError):
+        pass
+
+    # 5. Check static __version__ in python packages
+    skip_dirs = {
+        ".git", ".venv", "venv", "env", ".subactor", ".worktrees",
+        "tests", "test", "build", "dist", "node_modules", "fixtures",
+        "__pycache__", ".tox", ".nox", ".pytest_cache"
+    }
+    for init_file in root.glob("**/__init__.py"):
+        rel_parts = init_file.relative_to(root).parts
+        if any(part in skip_dirs for part in rel_parts):
+            continue
+        try:
+            text = init_file.read_text(encoding="utf-8")
+            m = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', text, re.MULTILINE)
+            if m:
+                found_v = m.group(1).strip()
+                if found_v != raw_version:
+                    rel_p = rel(root, init_file)
+                    report.add(
+                        "GOV-VERSION-001",
+                        f"Static __version__ '{found_v}' in {rel_p} does not match authoritative VERSION '{raw_version}'.",
+                        "Use dynamic version discovery (importlib.metadata / VERSION) or synchronize __version__ with VERSION.",
+                        [rel_p, "VERSION"],
+                    )
+        except (OSError, UnicodeDecodeError):
+            pass
+
+
 def immutable_image_reference(reference: str) -> bool:
     return reference == "scratch" or IMMUTABLE_IMAGE_RE.fullmatch(reference) is not None
 
@@ -4888,6 +5056,7 @@ def run_governance_checks(
     timed_step(report, "check_required_checks_declaration", check_required_checks_declaration, root, report)
     timed_step(report, "check_agent_hosts", check_agent_hosts, root, args.actor, report)
     timed_step(report, "check_required_files", check_required_files, root, manifest, report)
+    timed_step(report, "check_version_parity", check_version_parity, root, manifest, report)
     timed_step(report, "check_domain_contracts", check_domain_contracts, root, manifest, report)
     timed_step(report, "check_docker_image_references", check_docker_image_references, root, manifest, report)
     timed_step(report, "check_stacks", check_stacks, root, manifest, profiles_path, report)

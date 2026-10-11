@@ -520,6 +520,11 @@
       "message": "The migration authorization was consumed or its one-use base or ticket changed.",
       "remediation": "Preserve the source; reobserve the exact subject and protected grant before a bounded successor action.",
       "documentation": "error/GOV-SNAPSHOT-MIGRATION.md"
+    },
+    "GOV-VERSION-001": {
+      "message": "Declared package version does not match root VERSION specification.",
+      "remediation": "Synchronize package manifests (pyproject.toml, setup.py, package.json, Cargo.toml) and code declarations with the authoritative VERSION file.",
+      "documentation": "error/GOV-VERSION.md"
     }
   }
 }
