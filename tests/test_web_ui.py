@@ -486,7 +486,9 @@ process.stdout.write(JSON.stringify({ copied, hasInlineOnclick }));
         os.unlink(temp_js)
 
 
-def test_digit_shortcuts_align_with_filtered_workspaces():
+@pytest.mark.parametrize("query", ["shell", ""])
+@pytest.mark.parametrize("refresh_empty", [False, True])
+def test_digit_shortcuts_align_with_filtered_workspaces(query, refresh_empty):
     node = shutil.which("node")
     assert node, "Test requires Node.js"
     test_script = r"""
@@ -533,15 +535,24 @@ vm.runInContext(`
   selectWorkspace = id => { selectedWorkspace = id; };
 `, context);
 
-// Filter by "shell"
-getElementById('workspaceSearchInput').value = 'shell';
+// Render a nonempty inventory, with or without a search filter.
+getElementById('workspaceSearchInput').value = process.argv[2];
 vm.runInContext('renderWorkspacesBar();', context);
 
-// Trigger keydown '1'
-const keydownCb = windowListeners.get('keydown');
-keydownCb({ key: '1', ctrlKey: false, metaKey: false, altKey: false, preventDefault() {} });
+if (process.argv[3] === 'true') {
+  vm.runInContext('activeWorkspaces = []; renderWorkspacesBar();', context);
+}
 
-process.stdout.write(JSON.stringify({ selectedWorkspace: context.selectedWorkspace }));
+// Trigger keydown '1' after the optional inventory refresh.
+let prevented = false;
+const keydownCb = windowListeners.get('keydown');
+keydownCb({ key: '1', ctrlKey: false, metaKey: false, altKey: false, preventDefault() { prevented = true; } });
+
+process.stdout.write(JSON.stringify({
+  selectedWorkspace: context.selectedWorkspace ?? null,
+  prevented,
+  barDisplay: getElementById('workspacesBar').style.display
+}));
 """
     script = DASHBOARD_HTML.split("<script>", 1)[1].split("</script>", 1)[0]
     import tempfile, os
@@ -549,10 +560,16 @@ process.stdout.write(JSON.stringify({ selectedWorkspace: context.selectedWorkspa
         f.write(script)
         temp_js = f.name
     try:
-        run = subprocess.run([node, "-e", test_script, temp_js], capture_output=True, text=True, check=True)
+        run = subprocess.run(
+            [node, "-e", test_script, temp_js, query, json.dumps(refresh_empty)],
+            capture_output=True, text=True, check=True,
+        )
         out = json.loads(run.stdout)
-        # Should select the 1st visible item (ws-shell), NOT the filtered out item (ws-codex)
-        assert out["selectedWorkspace"] == "ws-shell"
+        expected = None if refresh_empty else ("ws-shell" if query else "ws-codex")
+        assert out["selectedWorkspace"] == expected
+        assert out["prevented"] is (not refresh_empty)
+        if refresh_empty:
+            assert out["barDisplay"] == "none"
     finally:
         os.unlink(temp_js)
 
