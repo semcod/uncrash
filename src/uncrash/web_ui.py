@@ -348,6 +348,66 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       pointer-events: none;
     }
     .toast.show { opacity: 1; }
+    :focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, ::before, ::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+    .status-pulse {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 6px var(--green);
+      animation: statusPulse 2s infinite;
+      vertical-align: middle;
+    }
+    @keyframes statusPulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.35; transform: scale(0.8); }
+    }
+    .novnc-container.fullscreen {
+      position: fixed !important;
+      inset: 0 !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      z-index: 10000 !important;
+      border-radius: 0 !important;
+      margin: 0 !important;
+      background: var(--bg-base) !important;
+    }
+    .novnc-container.fullscreen .novnc-frame {
+      height: calc(100vh - 48px) !important;
+    }
+    .kbd-hint {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      background: rgba(137, 180, 250, 0.15);
+      color: var(--accent);
+      padding: 1px 5px;
+      border-radius: 4px;
+      border: 1px solid rgba(137, 180, 250, 0.3);
+      margin-left: 4px;
+    }
+    .shortcuts-bar {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 4px 24px;
+      background: rgba(24, 24, 37, 0.7);
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
     .workspaces-bar {
       background: var(--bg-surface);
       border-bottom: 1px solid var(--border);
@@ -551,6 +611,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
     <div id="workspacesChips" style="display:flex; gap:8px; align-items:center; flex:1; overflow-x:auto;"></div>
     <button class="btn" style="padding:3px 8px; font-size:0.75rem" onclick="fetchWorkspaces(true)">🔄 Odśwież</button>
+  </div>
+
+  <div id="shortcutsBar" class="shortcuts-bar" style="display:none">
+    <span>⌨️ <strong style="color:var(--text-main)">Skróty Testwins UX:</strong></span>
+    <span><span class="kbd-hint">1-9</span> Przełącz workspace</span>
+    <span><span class="kbd-hint">F</span> Pełny ekran</span>
+    <span><span class="kbd-hint">R</span> Odśwież strumień</span>
+    <span><span class="kbd-hint">Esc</span> Zamknij podgląd</span>
+    <span style="margin-left:auto; display:flex; align-items:center; gap:6px;">
+      <span class="status-pulse"></span>
+      <span style="color:var(--green); font-weight:600; font-size:0.75rem">Live Sync</span>
+    </span>
   </div>
 
   <div class="layout">
@@ -866,17 +938,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     function renderWorkspacesBar() {
       const bar = document.getElementById('workspacesBar');
+      const shortcuts = document.getElementById('shortcutsBar');
       const chips = document.getElementById('workspacesChips');
       if (!bar || !chips) return;
 
       if (activeWorkspaces.length === 0) {
         bar.style.display = 'none';
+        if (shortcuts) shortcuts.style.display = 'none';
         return;
       }
       bar.style.display = 'flex';
-      chips.innerHTML = activeWorkspaces.map(ws => {
+      if (shortcuts) shortcuts.style.display = 'flex';
+      chips.innerHTML = activeWorkspaces.map((ws, idx) => {
         const isActive = ws.workspace_id === currentWorkspaceId;
         const shortName = ws.name || ws.workspace_id;
+        const kbdHint = idx < 9 ? `<span class="kbd-hint">${idx + 1}</span>` : '';
         let icon = '●';
         let badge = '🖥️ Natywny';
         let color = '#89b4fa';
@@ -894,6 +970,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div class="workspace-chip ${isActive ? 'active' : ''}" style="border-left: 3px solid ${color}" onclick="selectWorkspace('${ws.workspace_id}')">
             <span>${icon}</span>
             <span><strong>${shortName}</strong> [${badge}] (${tabsInfo})</span>
+            ${kbdHint}
             <span class="chip-close" onclick="event.stopPropagation(); closeWorkspace('${ws.workspace_id}')" title="Zamknij workspace">✕</span>
           </div>
         `;
@@ -986,26 +1063,54 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const stagingInfo = ws.workspace_dir
         ? `<span style="font-size:0.75rem; color:var(--text-muted)">Staging: <code>${ws.workspace_dir}</code> (${ws.staged_files_count || 0} plików)</span>`
         : '';
+      const tabChips = (ws.terminal_tabs || []).map((t, idx) => {
+        const p = (t.provider || 'shell').toUpperCase();
+        const tabTitle = t.name || t.title || p;
+        return `<span class="tag" style="background:#313244; color:var(--text-main); font-size:0.75rem">${idx}: <strong>${tabTitle}</strong></span>`;
+      }).join(' ');
+      const tabsBarHtml = tabChips ? `<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap"><span style="font-size:0.75rem; color:var(--text-muted)">Zregenerowane taby:</span> ${tabChips}</div>` : '';
+
       area.innerHTML = `
         <div class="novnc-container">
           <div style="background:var(--bg-surface); padding:10px 16px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); flex-wrap:wrap; gap:8px">
-            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap">
-              <span style="font-weight:700; font-size:0.95rem">🖥️ Workspace: <strong>${ws.workspace_id}</strong></span>
-              ${engineBadge}
-              <span class="tag tabs">${tabsCount} aktywnych kart</span>
-              <span style="font-size:0.8rem; color:var(--text-muted)">Ekran: <code>${ws.display}</code> · Port WS: <code>${ws.ws_port}</code> · RFB: <code>${ws.rfb_port}</code></span>
-              ${stagingInfo}
+            <div style="display:flex; flex-direction:column; gap:4px">
+              <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap">
+                <span class="status-pulse"></span>
+                <span style="font-weight:700; font-size:0.95rem">🖥️ Workspace: <strong>${ws.workspace_id}</strong></span>
+                ${engineBadge}
+                <span class="tag tabs">${tabsCount} aktywnych kart</span>
+                <span style="font-size:0.8rem; color:var(--text-muted)">Ekran: <code>${ws.display}</code> · Port WS: <code>${ws.ws_port}</code> · RFB: <code>${ws.rfb_port}</code></span>
+                ${stagingInfo}
+              </div>
+              ${tabsBarHtml}
             </div>
-            <div style="display:flex; gap:8px">
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+              <button class="btn" onclick="copyWorkspaceUrl('${ws.novnc_url}')" style="padding:4px 10px; font-size:0.75rem" title="Skopiuj bezpośredni URL noVNC">📋 Kopiuj link noVNC</button>
+              <button id="fullscreenToggleBtn" class="btn" onclick="toggleFullscreenWorkspace()" style="padding:4px 10px; font-size:0.75rem" title="Przełącz pełny ekran (Skrót: F)">⛶ Pełny ekran (F)</button>
               <a href="${ws.novnc_url}" target="_blank" class="btn" style="padding:4px 10px; font-size:0.75rem">Otwórz w nowej karcie ↗</a>
-              <button class="btn" onclick="reloadNovncIframe()" style="padding:4px 10px; font-size:0.75rem">🔄 Odśwież</button>
-              <button class="btn" onclick="closeWorkspace('${ws.workspace_id}')" style="padding:4px 10px; font-size:0.75rem; color:var(--red); border-color:var(--red)">✕ Zamknij Workspace</button>
-              <button class="btn" onclick="closePreviewArea()" style="padding:4px 10px; font-size:0.75rem">✕ Ukryj</button>
+              <button class="btn" onclick="reloadNovncIframe()" style="padding:4px 10px; font-size:0.75rem" title="Odśwież strumień (Skrót: R)">🔄 Odśwież (R)</button>
+              <button class="btn" onclick="closeWorkspace('${ws.workspace_id}')" style="padding:4px 10px; font-size:0.75rem; color:var(--red); border-color:var(--red)">✕ Zamknij</button>
+              <button class="btn" onclick="closePreviewArea()" style="padding:4px 10px; font-size:0.75rem" title="Ukryj podgląd (Skrót: Esc)">✕ Ukryj</button>
             </div>
           </div>
           <iframe id="novncIframe" src="${ws.novnc_url}" class="novnc-frame" style="height:680px"></iframe>
         </div>
       `;
+    }
+
+    function copyWorkspaceUrl(url) {
+      if (!url) return;
+      copyText(url);
+      showToast('Skopiowano adres noVNC do schowka!');
+    }
+
+    function toggleFullscreenWorkspace() {
+      const container = document.querySelector('.novnc-container');
+      const btn = document.getElementById('fullscreenToggleBtn');
+      if (!container) return;
+      const isFull = container.classList.toggle('fullscreen');
+      if (btn) btn.textContent = isFull ? '🗗 Wyjdź z pełnego ekranu (Esc)' : '⛶ Pełny ekran (F)';
+      showToast(isFull ? 'Tryb pełnoekranowy (Esc aby wyjść)' : 'Zamknięto pełny ekran');
     }
 
     function reloadNovncIframe() {
@@ -1361,6 +1466,40 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       } else {
         const modalEl = document.getElementById('appsModal');
         if (modalEl) modalEl.style.display = 'none';
+      }
+    });
+
+    window.addEventListener('keydown', (e) => {
+      const tag = document.activeElement ? (document.activeElement.tagName || '').toLowerCase() : '';
+      if (tag === 'input' || tag === 'textarea' || (document.activeElement && document.activeElement.isContentEditable)) return;
+
+      if (e.key >= '1' && e.key <= '9' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const idx = parseInt(e.key, 10) - 1;
+        if (activeWorkspaces && activeWorkspaces[idx]) {
+          e.preventDefault();
+          selectWorkspace(activeWorkspaces[idx].workspace_id);
+          showToast(`Przełączono na workspace [${idx + 1}]: ${activeWorkspaces[idx].name || activeWorkspaces[idx].workspace_id}`);
+        }
+      } else if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const container = document.querySelector('.novnc-container');
+        if (container) {
+          e.preventDefault();
+          toggleFullscreenWorkspace();
+        }
+      } else if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (currentWorkspaceId) {
+          e.preventDefault();
+          reloadNovncIframe();
+          showToast('Odświeżono strumień noVNC');
+        }
+      } else if (e.key === 'Escape') {
+        const container = document.querySelector('.novnc-container');
+        if (container && container.classList.contains('fullscreen')) {
+          e.preventDefault();
+          toggleFullscreenWorkspace();
+        } else if (currentWorkspaceId) {
+          closePreviewArea();
+        }
       }
     });
 
