@@ -143,6 +143,10 @@ def main(argv=None):
     pycharm_parser.add_argument('--dry-run', action='store_true', help='Report planned action without launching or terminating')
     pycharm_parser.add_argument('--start-ticks')
     pycharm_parser.add_argument('--pid', type=int, help='Target process PID for close operation')
+    pycharm_parser.add_argument('--preflight', action='store_true', help='Require a clear risk check before restore; needs an explicit --project')
+    pycharm_parser.add_argument('--log-dir', type=Path, help='IDE log directory for restore preflight; discovers bounded saved thread dumps')
+    pycharm_parser.add_argument('--thread-dump', type=Path, help='Existing Java dump for restore preflight')
+    pycharm_parser.add_argument('--max-age-seconds', type=int, default=600)
     window = sub.add_parser('window-close', help='Request one explicit X11 window close with PID/start fencing')
     window.add_argument('--xid', type=lambda v: int(v, 0), required=True)
     window.add_argument('--pid', type=int, required=True)
@@ -189,7 +193,21 @@ def main(argv=None):
         if args.command == 'pycharm':
             is_restore = args.restore or (getattr(args, 'action', None) == 'restore')
             is_close = args.close or (getattr(args, 'action', None) == 'close')
+            if args.preflight and (not is_restore or is_close or not args.project):
+                raise RecoveryError('Restore preflight requires restore and an explicit --project; cannot combine with close')
             if is_restore:
+                if args.preflight:
+                    report = inspect_health(log_dir=args.log_dir, thread_dump=args.thread_dump,
+                                            project=args.project, pid=args.pid, expected_start=args.start_ticks,
+                                            max_age_seconds=args.max_age_seconds)
+                    if report['preflight_exit_code']:
+                        print(json.dumps({'action': 'restore-pycharm', 'status': 'blocked_by_preflight',
+                                          'launched': False, 'preflight': report}, ensure_ascii=False, indent=2))
+                        return report['preflight_exit_code']
+                    result = restore_pycharm(project=args.project, executable=args.executable, dry_run=args.dry_run)
+                    print(json.dumps({'action': 'restore-pycharm', 'preflight': report,
+                                      'restore': result}, ensure_ascii=False, indent=2))
+                    return 0
                 print(json.dumps(restore_pycharm(project=args.project, executable=args.executable, dry_run=args.dry_run), ensure_ascii=False, indent=2))
                 return 0
             if is_close:

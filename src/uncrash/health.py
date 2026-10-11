@@ -72,6 +72,50 @@ def analyze_threads(text):
     return result
 
 
+def _discover_dump(log_dir):
+    """Find the newest saved IDE dump under fixed entry quotas; never attach to Java."""
+    try:
+        root = no_links(Path(log_dir).absolute())
+        if root.stat().st_uid != os.getuid():
+            return None, 'unowned_directory'
+        def entries(folder):
+            with os.scandir(folder) as stream:
+                result = list(itertools.islice(stream, 129))
+            if len(result) > 128:
+                raise RecoveryError('Dump directory entry quota exceeded')
+            return result
+        folders = []
+        for item in entries(root):
+            if item.name.startswith('threadDumps'):
+                if not item.is_dir(follow_symlinks=False):
+                    return None, 'unsafe_dump_directory'
+                folders.append(Path(item.path))
+                if len(folders) > 16:
+                    return None, 'directory_quota_exceeded'
+        latest, count = None, 0
+        for folder in folders:
+            folder = no_links(folder)
+            if folder.stat().st_uid != os.getuid():
+                return None, 'unowned_directory'
+            for item in entries(folder):
+                count += 1
+                if count > 128:
+                    return None, 'entry_quota_exceeded'
+                if not item.name.startswith('threadDump') or not item.name.endswith('.txt'):
+                    continue
+                info = item.stat(follow_symlinks=False)
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+                    return None, 'unsafe_dump_file'
+                candidate = (info.st_mtime_ns, item.name, item.path)
+                if latest is None or candidate > latest:
+                    latest = candidate
+        return (Path(latest[2]), 'latest_saved_dump') if latest else (None, 'no_saved_dump')
+    except RecoveryError:
+        return None, 'directory_or_path_quota'
+    except OSError:
+        return None, 'unavailable'
+
+
 def _resources(proc):
     result = {'status': 'unavailable', 'pressure': {}}
     try:
@@ -238,6 +282,10 @@ def inspect_health(*, log_dir=None, thread_dump=None, project=None, pid=None,
                         freshness=event_status, age_seconds=event_age, events=len(errors))
         except (OSError, RecoveryError):
             pass
+    source, selection = ('explicit', 'explicit_file') if thread_dump is not None else ('none', 'not_requested')
+    if thread_dump is None and log_dir is not None:
+        thread_dump, selection = _discover_dump(log_dir)
+        source = 'discovered'
     dump = {'status': 'unavailable'}
     if thread_dump is not None:
         try:
@@ -261,6 +309,7 @@ def inspect_health(*, log_dir=None, thread_dump=None, project=None, pid=None,
                         freshness=dump['status'], threads=counts['terminal_close_waits'])
         except (OSError, RecoveryError):
             pass
+    dump.update(source=source, selection=selection)
     resources = _resources(proc)
     available = resources.get('available_percent')
     if available is not None and available < 10:

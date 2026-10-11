@@ -10,11 +10,13 @@
 
 SESSION_EXECUTION_AUTHORIZATION: the user requested investigation and closing only the last PyCharm window, preserving other windows, then instructed continuation. Intake PLF-13801. Implement in the disjoint CLI/window-control scope; ticket-010 retains recovery.py and ticket-011 remains frozen for publication. No whole-process termination of the user's IDE is authorized.
 
-Require explicit whole-process intent for CLI, REST and MCP process-close routes. Inspect live X11 windows and request one fenced PyCharm window close with verification and no kill fallback. Report native Wayland control as unavailable when no verified adapter exists. No GUI keyboard automation, JVM injection, dependency changes or production installation.
+Require explicit whole-process intent for CLI, REST and MCP process-close routes. Inspect live X11 windows and request one fenced PyCharm window close with verification and no kill fallback. Report native Wayland control as unavailable when no verified adapter exists. No GUI keyboard automation, JVM injection or dependency changes. The later continuation below authorizes only the versioned local user CLI.
 
 Scope continuation: src/uncrash/api.py is free according to the managed work-start observation. It exposes the same process-signalling operation through REST/MCP, so consent there is necessary for the accepted safety outcome. The controller released only this session's prior lease by exact CAS and rebound ticket-012 to the extended scope; snapshot and decision receipt are in the external local operator receipts.
 
 Prevention continuation (PLF-13803): SESSION_EXECUTION_AUTHORIZATION on 2026-10-10 requests improvements preventing future freezes. Extend the owned ticket with bounded, read-only health.py and tests/test_health.py, CLI doctor and REST/MCP inspection. Detect fresh IO exhaustion, Docker/IJent thread waits, memory/IO pressure and generated indexing roots. Stale, missing, malformed or quota-limited data must not produce a healthy verdict. No automatic signals, Docker operations, JVM injection, dependency changes, IDE configuration edits or deployment. External scope decision and controller lease bind this extension.
+
+Restore-gate continuation: SESSION_EXECUTION_AUTHORIZATION from the user's next continuation covers connecting the risk check to explicit PyCharm restore and making this tested local CLI available. Keep this in the existing owned scope. Local inspection found the user launcher pointing at Twinerd with an editable source path to an absent ticket-007 checkout. Prepare a versioned per-user CLI installation, preserve the original symlink for rollback, verify the exact committed source, and replace only that launcher by CAS. Do not edit the shared environment, restart the daemon, change IDE settings, terminate processes, push or merge. Planfile synchronization is retained in the external outbox because the adapter session is terminated.
 
 ## Acceptance criteria
 
@@ -26,6 +28,9 @@ Prevention continuation (PLF-13803): SESSION_EXECUTION_AUTHORIZATION on 2026-10-
 - [x] AC-05: Bounded read-only doctor reports incident IO starvation patterns, fresh/stale/unknown evidence, system pressure and IDE generated-root exclusion audit.
 - [x] AC-06: CLI preflight gates additional load; REST/MCP expose equivalent read-only findings without changing liveness health.
 - [x] AC-07: Regression tests cover incident counts, coroutine duplicates, stale/missing/malformed/oversized evidence, unsafe paths, process identity and exclusion boundaries; full stack and managed governance pass.
+
+- [x] AC-08: Explicit pycharm restore --preflight blocks all restore calls on warning/critical/unknown evidence; bounded saved-dump discovery avoids JVM attach and has quota/symlink/freshness tests.
+- [ ] AC-09: A versioned user CLI installation from exact committed source supports doctor and refusal of unconsented close; original launcher and daemon process/config are preserved.
 
 ## Validation and remaining work
 
@@ -44,6 +49,16 @@ Example after this branch is installed: `uncrash doctor --log-dir ~/.cache/JetBr
 Live-host read-only inspection reproduced the critical IO-exhaustion finding, with verified process identity. Existing dump counts were 63 Docker exit waits and 115 IJent filesystem waits, correctly marked stale. Generated roots had unknown IDE exclusions; source content, raw stack traces, terminal commands and private agent data are not returned. Limits bound bytes, module/directory counts and accepted XML; symlinks, special files, malformed, stale and truncated evidence cannot yield a green verdict.
 
 New material source remains local; no production installation, push, PR, merge or deployment was requested. Planfile PLF-13803 exists, but its status update failed with MCP session terminated; a local external outbox preserves the next synchronization. Do not retry that terminated session indefinitely. Ticket remains IN_PROGRESS / VALIDATION pending authorized delivery, and the session lease is released by exact controller CAS after the local commit/checkpoint.
+
+## Restore-gate validation and local installation
+
+Restore-gate source passed 168 tests / 9 optional skips under the base Python runtime selected for the per-release environment, including the actual Xvfb/Openbox single-window fixture. The Twinerd venv focused suite passed 84 / 1 python-xlib skip. The health suite now contains 55 tests. Managed governance and diff formatting pass. The live restore gate returned blocked_by_preflight, launched=false, exit 2 on current IO exhaustion.
+
+Doctor can now select the newest saved IDE thread dump when --log-dir is given and --thread-dump is omitted. It bounds directory entries, directories and files, rejects links/special files and never invokes jcmd or attaches to Java. Freshness remains explicit; no available dump or an incomplete inventory cannot produce a green result.
+
+After local installation, run `uncrash doctor --log-dir ~/.cache/JetBrains/PyCharm2026.2/log --project . --preflight`. To gate an explicit restore, use `uncrash pycharm restore --project /path/to/project --log-dir /path/to/IDE/log --preflight`. --preflight requires a known project, cannot combine with close, and returns 1/2/3 before any restore call on warning/critical/unknown evidence. Direct desktop launches and restores without this flag remain outside this gate.
+
+AC-09 is pending the post-commit local effect. The installer will bind the committed head and source digests, use a private per-release venv with existing base-system dependencies, and atomically replace the observed per-user uncrash symlink. Preserve its original target for rollback. Do not change Twinerd, the running snapshot daemon, IDE processes/settings, Docker, remote branches or PRs. Completion and rollback bindings belong in the external installation/delivery receipt; create no carrier-only closure commit.
 
 ## Tracking boundary
 

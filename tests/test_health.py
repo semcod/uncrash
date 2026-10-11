@@ -76,6 +76,43 @@ def test_stale_dump_never_allows_preflight(evidence):
     assert report['status'] == 'unknown' and report['preflight_exit_code'] == 3
 
 
+def test_discovery_selects_latest_saved_dump_without_attach(evidence):
+    folder = evidence['log_dir'] / 'threadDumps-Dispatchers.IO'; folder.mkdir()
+    older, newer = folder / 'threadDump-old.txt', folder / 'threadDump-new.txt'
+    older.write_text(thread('main', 'at DockerAgentContainerImpl$waitForExit'))
+    newer.write_text(evidence['thread_dump'].read_text())
+    os.utime(older, (NOW-100, NOW-100)); os.utime(newer, (NOW, NOW))
+    report = health.inspect_health(**{**evidence, 'thread_dump': None})
+    assert report['status'] == 'no_risk_observed'
+    assert report['thread_dump']['source'] == 'discovered'
+    assert report['thread_dump']['docker_exit_waits'] == 0
+
+
+@pytest.mark.parametrize('unsafe', ['symlink', 'fifo', 'too_many_entries', 'too_many_directories'])
+def test_discovery_refuses_incomplete_or_unsafe_inventory(evidence, unsafe):
+    folder = evidence['log_dir'] / 'threadDumps-1'; folder.mkdir()
+    path = folder / 'threadDump-test.txt'
+    if unsafe == 'symlink':
+        path.symlink_to(evidence['thread_dump'])
+    elif unsafe == 'fifo':
+        os.mkfifo(path)
+    elif unsafe == 'too_many_entries':
+        for i in range(129): (folder / str(i)).touch()
+    else:
+        for i in range(17): (evidence['log_dir'] / f'threadDumps-extra-{i}').mkdir()
+    report = health.inspect_health(**{**evidence, 'thread_dump': None})
+    assert report['status'] == 'unknown'
+    assert report['thread_dump']['status'] == 'unavailable'
+
+
+def test_discovery_stale_or_future_dump_does_not_allow_launch(evidence):
+    folder = evidence['log_dir'] / 'threadDumps-1'; folder.mkdir()
+    path = folder / 'threadDump-test.txt'; path.write_text(evidence['thread_dump'].read_text())
+    for stamp in (NOW-3600, NOW+3600):
+        os.utime(path, (stamp, stamp))
+        assert health.inspect_health(**{**evidence, 'thread_dump': None})['status'] == 'unknown'
+
+
 @pytest.mark.parametrize('kind', ['missing', 'malformed', 'oversized', 'symlink', 'fifo', 'future'])
 def test_unusable_dump_never_produces_green(evidence, tmp_path, kind):
     path = evidence['thread_dump']
@@ -225,6 +262,33 @@ def test_cli_preflight_codes_bypass_store_and_environment(monkeypatch, capsys, c
     assert cli.main(['doctor', '--preflight']) == code
     assert cli.main(['doctor']) == 0
     assert capsys.readouterr().out
+
+
+@pytest.mark.parametrize('code', [1, 2, 3])
+@pytest.mark.parametrize('dry_run', [False, True])
+def test_restore_preflight_never_reaches_launcher_when_blocked(monkeypatch, capsys, code, dry_run):
+    monkeypatch.setattr(cli, 'inspect_health', lambda **kw: {'preflight_exit_code': code})
+    monkeypatch.setattr(cli, 'restore_pycharm', lambda **kw: pytest.fail('blocked preflight reached restore'))
+    command = ['pycharm', 'restore', '--project', '/project', '--preflight']
+    assert cli.main(command + (['--dry-run'] if dry_run else [])) == code
+    assert json.loads(capsys.readouterr().out)['launched'] is False
+
+
+def test_successful_restore_uses_exact_inspected_project_and_original_options(monkeypatch, capsys):
+    inspected, launched = [], []
+    monkeypatch.setattr(cli, 'inspect_health', lambda **kw: inspected.append(kw) or {'preflight_exit_code': 0})
+    monkeypatch.setattr(cli, 'restore_pycharm', lambda **kw: launched.append(kw) or {'status': 'dry-run'})
+    assert cli.main(['pycharm', '--restore-last', '--project', '/project', '--preflight', '--log-dir', '/logs', '--executable', '/ide', '--dry-run']) == 0
+    assert inspected[0]['project'] == launched[0]['project'] == '/project'
+    assert launched[0] == {'project': '/project', 'executable': '/ide', 'dry_run': True}
+    assert json.loads(capsys.readouterr().out)['preflight']['preflight_exit_code'] == 0
+
+
+@pytest.mark.parametrize('args', [['pycharm', '--preflight'], ['pycharm', 'restore', '--preflight'], ['pycharm', 'restore', '--preflight', '--project', '/project', '--close']])
+def test_ambiguous_or_unbound_preflight_is_refused(monkeypatch, args):
+    monkeypatch.setattr(cli, 'restore_pycharm', lambda **kw: pytest.fail('ambiguous restore reached launcher'))
+    monkeypatch.setattr(cli, 'close_gui_app', lambda **kw: pytest.fail('preflight reached process signalling'))
+    assert cli.main(args) == 1
 
 
 def test_rest_doctor_and_transport_health_are_distinct(tmp_path, monkeypatch):
