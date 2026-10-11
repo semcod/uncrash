@@ -81,3 +81,7 @@ Native qualification found a host-dependent API inventory test and transient X11
 Follow-up validation: 84 focused API/window tests and 216 complete product tests pass with 9 existing opt-in skips. Managed governance passes. AC-11 remains pending fresh native qualification and protected exact-head publication.
 
 - [ ] AC-11: Native canary verifies deterministic installed/empty API fixtures and bounded transient X11 observation without additional close requests or process signals; fresh independent review covers the resulting head.
+
+The unmodified native canary reproduced a startup race despite early supporting-window/redirect properties. Openbox source initializes its event listener and initial client scan later, before its explicit startup command. The owned X11 fixture now waits for that startup command to write a private readiness marker, disables session-manager attachment and uses its private fixture home. It still requires all four actual windows, actual graceful-close delivery and three preserved peers. Independent source reference: https://github.com/Mikachu/openbox/blob/master/openbox/openbox.c (initialization and run_startup_cmd ordering).
+
+Startup-handshake validation: the actual owned X11 close-one-of-four fixture passes under the same unprivileged native UID, isolated network and 4 GiB/2 CPU limits. The refreshed full host suite passes 216 tests with 9 existing opt-in skips; native complete-suite qualification and independent review remain pending for the final committed head.

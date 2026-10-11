@@ -261,10 +261,12 @@ def test_mcp_rejects_coerced_process_close_flags(monkeypatch, tmp_path, field, v
     asyncio.run(exercise())
 
 
-def test_real_x11_four_windows_one_process_close_one(monkeypatch):
+def test_real_x11_four_windows_one_process_close_one(monkeypatch, tmp_path):
     """Exercise actual WM_DELETE_WINDOW on an owned Xvfb/Openbox desktop."""
     pytest.importorskip('Xlib')
     from Xlib import X, Xatom, display
+    import shlex
+    import sys
     if not shutil.which('Xvfb') or not shutil.which('openbox'):
         pytest.skip('Owned X11 integration fixture requires Xvfb and Openbox')
     read_fd, write_fd = os.pipe()
@@ -280,13 +282,22 @@ def test_real_x11_four_windows_one_process_close_one(monkeypatch):
         name = ':' + os.read(read_fd, 64).decode().strip()
         monkeypatch.setenv('DISPLAY', name)
         monkeypatch.setenv('XDG_SESSION_TYPE', 'x11')
-        wm = subprocess.Popen(['openbox'], env={**os.environ, 'DISPLAY': name},
+        ready = tmp_path / 'openbox-ready'
+        startup = shlex.join([sys.executable, '-I', '-B', '-c',
+                              'from pathlib import Path; import sys; Path(sys.argv[1]).write_text("ready")',
+                              str(ready)])
+        wm = subprocess.Popen(['openbox', '--sm-disable', '--startup', startup],
+                              env={**os.environ, 'DISPLAY': name, 'HOME': str(tmp_path)},
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         connection = display.Display(name)
         root = connection.screen().root
         end = time.monotonic() + 5
-        while (root.get_full_property(connection.intern_atom('_NET_SUPPORTING_WM_CHECK'), Xatom.WINDOW) is None
+        # Supporting-window/redirect properties precede Openbox's event listener.
+        # Its startup command runs only after that listener and client scan exist.
+        while (not ready.is_file()
+               or root.get_full_property(connection.intern_atom('_NET_SUPPORTING_WM_CHECK'), Xatom.WINDOW) is None
                or not root.get_attributes().all_event_masks & X.SubstructureRedirectMask):
+            assert wm.poll() is None, 'Owned window manager exited during startup'
             assert time.monotonic() < end, 'Owned window manager did not start'
             time.sleep(.05)
         windows = []
@@ -301,7 +312,8 @@ def test_real_x11_four_windows_one_process_close_one(monkeypatch):
         connection.sync()
         end = time.monotonic() + 5
         while len(control.window_inventory()['windows']) != 4:
-            assert time.monotonic() < end, 'Four windows were not registered'
+            assert wm.poll() is None, 'Owned window manager exited before registering clients'
+            assert time.monotonic() < end, control.window_inventory()
             time.sleep(.05)
         received = []
         def serve():
