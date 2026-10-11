@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import stat
 import subprocess
 import tarfile
@@ -613,66 +614,100 @@ def close_gui_app(pid=None, name=None, force=False, expected_start=None):
 
 
 def salvage_agent_session_db(source_path: Path, output_path: Path) -> dict:
-    """Quarantine and salvage a corrupted SQLite session database."""
-    source_path = Path(source_path)
-    output_path = Path(output_path)
-    session_id = source_path.stem
-    h = hashlib.sha256()
-    with open(source_path, 'rb') as f:
-        while chunk := f.read(65536):
-            h.update(chunk)
-    orig_sha256 = h.hexdigest()
+    """Recover an offline snapshot to a new path; preserve the source on failure.
 
+    Live SQLite sidecars require a consistent snapshot before this operation.
+    A private quarantine retains the exact input, including after failed recovery.
+    """
+    import sqlite3
+    import tempfile
+    import time
     from datetime import datetime, timezone
-    timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
-    quarantine_path = source_path.parent / f'{source_path.name}.corrupt.{timestamp}'
-    shutil.copy2(source_path, quarantine_path)
+    from urllib.parse import quote
 
-    dump_proc = subprocess.run(
-        ['sqlite3', str(source_path), '.dump'],
-        capture_output=True,
-        text=False
-    )
-    if dump_proc.returncode != 0 and not dump_proc.stdout:
-        return {
-            'schema': 'wellmanifest.session-recovery-salvage/v1',
-            'sessionId': session_id,
-            'originalStorePath': str(source_path),
-            'quarantinedPath': str(quarantine_path),
-            'recoveredStorePath': str(output_path),
-            'originalSha256': orig_sha256,
-            'recoveredSha256': '0' * 64,
-            'salvagedStepCount': 0,
-            'diagnosticFinding': f'Failed to dump SQL: {dump_proc.stderr.decode(errors="replace")}',
-            'salvagedAt': datetime.now(timezone.utc).isoformat(),
-            'status': 'FAILED',
-        }
-
+    source_path, output_path = no_links(source_path), no_links(output_path)
     if output_path.exists():
-        output_path.unlink()
-
-    subprocess.run(['sqlite3', str(output_path)], input=dump_proc.stdout, capture_output=True)
-
-    h_rec = hashlib.sha256()
-    if output_path.is_file():
-        with open(output_path, 'rb') as f:
-            while chunk := f.read(65536):
-                h_rec.update(chunk)
-        recovered_sha256 = h_rec.hexdigest()
-    else:
-        recovered_sha256 = '0' * 64
-
-    return {
+        raise RecoveryError('Recovery output already exists; choose a new path')
+    if any(Path(str(source_path) + suffix).exists() for suffix in ('-wal', '-shm', '-journal')):
+        raise RecoveryError('Live SQLite sidecars require a consistent snapshot before salvage')
+    deadline = time.monotonic() + 10
+    with _file(source_path) as source:
+        before = os.fstat(source.fileno())
+        if before.st_size > 32 * 1024**2:
+            raise RecoveryError('Session database exceeds the recovery byte budget')
+        raw = source.read(32 * 1024**2 + 1)
+        if (len(raw) != before.st_size or _signature(before) != _signature(os.fstat(source.fileno()))
+                or _signature(before) != _signature(no_links(source_path).stat())):
+            raise RecoveryError('Session database changed during quarantine capture')
+    if any(Path(str(source_path) + suffix).exists() for suffix in ('-wal', '-shm', '-journal')):
+        raise RecoveryError('SQLite sidecars appeared during quarantine capture')
+    quarantine_dir = Path(tempfile.mkdtemp(prefix='uncrash-session-quarantine-', dir=output_path.parent))
+    quarantine_path = quarantine_dir / source_path.name
+    write_file(quarantine_path, raw)
+    original_sha256 = hashlib.sha256(raw).hexdigest()
+    del raw
+    sync_dir(quarantine_dir)
+    receipt = {
         'schema': 'wellmanifest.session-recovery-salvage/v1',
-        'sessionId': session_id,
+        'sessionId': source_path.stem,
         'originalStorePath': str(source_path),
         'quarantinedPath': str(quarantine_path),
         'recoveredStorePath': str(output_path),
-        'originalSha256': orig_sha256,
-        'recoveredSha256': recovered_sha256,
+        'originalSha256': original_sha256,
+        'recoveredSha256': '0' * 64,
         'salvagedStepCount': 0,
+        'verifiedIntegrity': 'failed',
         'salvagedAt': datetime.now(timezone.utc).isoformat(),
-        'status': 'COMPLETED' if output_path.is_file() else 'FAILED',
+        'status': 'FAILED',
     }
-
+    source_db = recovered_db = None
+    try:
+        with tempfile.TemporaryDirectory(prefix='uncrash-session-staging-', dir=output_path.parent) as staging:
+            temporary = Path(staging) / 'recovered.db'
+            write_file(temporary, b'')
+            source_db = sqlite3.connect('file:' + quote(str(quarantine_path), safe='/') + '?mode=ro&immutable=1', uri=True)
+            recovered_db = sqlite3.connect(temporary, isolation_level=None)
+            for connection in (source_db, recovered_db):
+                connection.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+            recovered_db.execute('PRAGMA max_page_count=16384')
+            dumped_bytes = 0
+            for statement in source_db.iterdump():
+                dumped_bytes += len(statement.encode('utf-8'))
+                if dumped_bytes > 64 * 1024**2 or time.monotonic() >= deadline:
+                    raise RecoveryError('Session recovery budget exceeded')
+                recovered_db.execute(statement)
+            if recovered_db.in_transaction or recovered_db.execute('PRAGMA quick_check(20)').fetchall() != [('ok',)]:
+                raise RecoveryError('Recovered SQLite integrity was not verified')
+            table_names = [row[0] for row in recovered_db.execute(
+                "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()]
+            if not table_names:
+                raise RecoveryError('No tables could be salvaged from the session database')
+            step_tables = [t for t in table_names if any(k in t.lower() for k in ('step', 'message', 'event', 'turn', 'history'))]
+            target_tables = step_tables if step_tables else table_names
+            salvaged_count = 0
+            for t in target_tables:
+                safe_t = t.replace('"', '""')
+                salvaged_count += recovered_db.execute(f'SELECT count(*) FROM "{safe_t}"').fetchone()[0]
+            receipt['salvagedStepCount'] = salvaged_count
+            receipt['verifiedIntegrity'] = 'ok'
+            source_db.close(); source_db = None
+            recovered_db.close(); recovered_db = None
+            digest, size = _digest(temporary)
+            if size > 64 * 1024**2:
+                raise RecoveryError('Recovered database exceeds the byte budget')
+            with _file(temporary) as stream:
+                os.fsync(stream.fileno())
+            no_links(output_path)
+            # link fails atomically if another writer created the destination.
+            os.link(temporary, output_path, follow_symlinks=False)
+            sync_dir(output_path.parent)
+            receipt.update(status='COMPLETED', recoveredSha256=digest)
+    except (OSError, sqlite3.Error, RecoveryError, UnicodeError) as exc:
+        receipt['diagnosticFinding'] = f'SQLite recovery or verified publication failed: {exc}'
+        receipt['salvagedStepCount'] = 0
+        receipt['verifiedIntegrity'] = 'failed'
+    finally:
+        if source_db is not None: source_db.close()
+        if recovered_db is not None: recovered_db.close()
+    return receipt
 
