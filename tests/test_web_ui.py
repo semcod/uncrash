@@ -575,3 +575,133 @@ process.stdout.write(JSON.stringify({
 
 
 
+
+
+WORKSPACE_BAR_HARNESS = r"""
+const vm = require('node:vm'), fs = require('node:fs');
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+const nodes = new Map(), selected = [], closed = [], listeners = {};
+const attr = (tag, name) => tag.match(new RegExp('\\b'+name+'="([^"]*)"'))?.[1];
+let markup = '', targets = [], stopped = false;
+const fixed = ['workspacesBar', 'shortcutsBar', 'workspacesChips', 'workspaceSearchInput', 'searchInput'];
+const node = id => ({id, value:'', style:{}, innerHTML:'', addEventListener(){}, classList:{add(){},remove(){},toggle(){}}});
+for (const id of fixed) {
+  nodes.set(id, node(id));
+}
+const chips = nodes.get('workspacesChips');
+Object.defineProperty(chips, 'innerHTML', {
+  get: () => markup,
+  set: value => {
+    markup = value; targets = [];
+    for (const id of [...nodes.keys()]) {
+      if (!fixed.includes(id)) nodes.delete(id);
+    }
+    for (const match of markup.matchAll(/<[a-z][\w-]*\b[^>]*>/gi)) {
+      const tag = match[0], id = attr(tag, 'id');
+      const element = node(id);
+      element.inline = attr(tag, 'onclick');
+      element.classes = (attr(tag, 'class') || '').split(/\s+/);
+      if (id) nodes.set(id, element);
+      if (element.classes.includes('workspace-chip') || element.classes.includes('chip-close')) targets.push(element);
+    }
+  }
+});
+const context = vm.createContext({
+  document:{readyState:'loading',activeElement:{tagName:'BODY'},addEventListener(){},
+    getElementById: id => nodes.get(id) || null},
+  window:{addEventListener:(kind,fn) => listeners[kind]=fn, location:new URL('http://localhost/'),history:{replaceState(){}}},
+  URL, URLSearchParams, console, setTimeout(){}, setInterval(){}
+});
+vm.runInContext(input.script, context, {timeout:1000});
+context.showToast = () => {};
+context.selectWorkspace = id => selected.push(id);
+context.closeWorkspace = id => closed.push(id);
+context.items = input.workspaces;
+vm.runInContext('activeWorkspaces = items;', context);
+nodes.get('workspaceSearchInput').value = input.query;
+context.renderWorkspacesBar();
+let error = null;
+const event = {stopPropagation(){stopped = true;}};
+const invoke = target => {
+  if (!target) throw Error('No rendered action target');
+  if (typeof target.onclick === 'function') target.onclick(event);
+  else if (target.inline) {context.event=event;vm.runInContext(target.inline,context,{timeout:1000});}
+  else throw Error('Rendered action has no handler');
+};
+try {
+  if (input.click) {
+    const parent = targets.filter(n => n.classes.includes('workspace-chip'))[0];
+    if (input.click === 'close') {
+      invoke(targets.filter(n => n.classes.includes('chip-close'))[0]);
+      if (!stopped) invoke(parent);
+    } else invoke(parent);
+  }
+  if (input.key) listeners.keydown({key:input.key,ctrlKey:false,metaKey:false,altKey:false,preventDefault(){}});
+} catch(err) {error=err.message;}
+process.stdout.write(JSON.stringify({html:markup,selected,closed,stopped,error,injected:!!context.injected}));
+"""
+
+
+def execute_workspace_bar(workspaces, *, query="", click=None, key=None):
+    node = shutil.which("node")
+    assert node, "Workspace bar execution tests require Node"
+    script = DASHBOARD_HTML.split("<script>", 1)[1].split("</script>", 1)[0]
+    run = subprocess.run(
+        [node, "-e", WORKSPACE_BAR_HARNESS],
+        input=json.dumps(dict(script=script, workspaces=workspaces, query=query, click=click, key=key)),
+        capture_output=True, text=True, timeout=10,
+    )
+    assert run.returncode == 0, run.stderr
+    return json.loads(run.stdout)
+
+
+def workspace_chip(**overrides):
+    result = dict(workspace_id="ws-test", name="Workspace", engine="native", display=":1", tabs_count=0)
+    result.update(overrides)
+    return result
+
+
+@pytest.mark.parametrize("field", ["name", "workspace_id", "display"])
+@pytest.mark.parametrize("text", [
+    "Normal label",
+    '<img src=x onerror="globalThis.injected=true">',
+    '<svg onload="globalThis.injected=true"></svg>',
+    'Projekt Żółć 🧪 O\'Reilly "quoted" & < >',
+])
+def test_workspace_chip_metadata_is_literal_text(field, text):
+    ws = workspace_chip(**{field:text})
+    if field == "workspace_id":
+        ws["name"] = ""
+    result = execute_workspace_bar([ws])
+    assert result["error"] is None
+    parsed = ParsedHTML(result["html"])
+    assert text in "".join(parsed.text)
+    assert not any(tag in {"img", "svg", "script"} for tag, _ in parsed.tags)
+    assert all("onerror" not in attrs and "onload" not in attrs for _, attrs in parsed.tags)
+
+
+@pytest.mark.parametrize("workspace_id", [
+    "ws-test", "O'Reilly Żółć 🧪", "x');globalThis.injected=true;//",
+])
+@pytest.mark.parametrize("click", ["select", "close"])
+def test_workspace_chip_callbacks_keep_raw_ids_and_close_stops_selection(workspace_id, click):
+    result = execute_workspace_bar([workspace_chip(workspace_id=workspace_id)], click=click)
+    assert result["error"] is None
+    assert not result["injected"]
+    assert result["selected"] == ([workspace_id] if click == "select" else [])
+    assert result["closed"] == ([workspace_id] if click == "close" else [])
+    assert result["stopped"] is (click == "close")
+    parsed = ParsedHTML(result["html"])
+    assert all("onclick" not in attrs for _, attrs in parsed.tags)
+
+
+@pytest.mark.parametrize("click,key", [("select", None), ("close", None), (None, "1")])
+def test_workspace_chip_actions_match_first_visible_filtered_item(click, key):
+    workspaces = [workspace_chip(workspace_id="codex-first", name="Codex"),
+                  workspace_chip(workspace_id="shell-second", name="Shell")]
+    result = execute_workspace_bar(workspaces, query="shell", click=click, key=key)
+    assert result["error"] is None
+    assert result["selected"] == ([] if click == "close" else ["shell-second"])
+    assert result["closed"] == (["shell-second"] if click == "close" else [])
+    assert 'Codex' not in result["html"]
+    assert '<span class="kbd-hint">1</span>' in result["html"]

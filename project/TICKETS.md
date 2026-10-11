@@ -33,4 +33,5 @@
 | **ticket-029** | [`README.md`](./ticket-029/README.md) | - | - |  [`ai-gemini.md`](./ticket-029/ai-gemini.md) | - | - |
 | **ticket-030** | [`README.md`](./ticket-030/README.md) | - | - |  [`ai-gemini.md`](./ticket-030/ai-gemini.md) | - | - |
 | **ticket-031** | [`README.md`](./ticket-031/README.md) | - | - |  [`ai-gemini.md`](./ticket-031/ai-gemini.md) | - | - |
+| **ticket-032** | [`README.md`](./ticket-032/README.md) | - | - |  [`ai-codex-root.md`](./ticket-032/ai-codex-root.md) | - | - |
 <!-- AUTO:TICKET_INDEX:END -->
