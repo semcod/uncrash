@@ -412,3 +412,149 @@ def test_workspace_preview_preserves_tab_title_as_text(field, text):
     assert all('onerror' not in attrs and 'onload' not in attrs for _, attrs in parsed.tags)
 
 
+def test_workspace_preview_copy_url_handler_raw_and_safe():
+    node = shutil.which("node")
+    assert node, "Test requires Node.js"
+    test_script = r"""
+const vm = require('node:vm');
+const fs = require('node:fs');
+const nodes = new Map();
+const listeners = new Map();
+const copied = [];
+const element = id => {
+  const classes = new Set();
+  return {
+    id, innerHTML: '', textContent: '', value: '', style: {}, children: [],
+    addEventListener(kind, cb) {
+      if (!listeners.has(id)) listeners.set(id, new Map());
+      listeners.get(id).set(kind, cb);
+    },
+    click() {
+      const cb = listeners.get(id)?.get('click');
+      if (cb) cb();
+    },
+    appendChild(child) { this.children.push(child); },
+    classList: { add(x){classes.add(x)}, remove(x){classes.delete(x)}, contains(x){return classes.has(x)} },
+    querySelectorAll() { return []; }
+  };
+};
+const getElementById = id => {
+  if (!nodes.has(id)) nodes.set(id, element(id));
+  return nodes.get(id);
+};
+const context = vm.createContext({
+  document: { getElementById, querySelectorAll: () => [], createElement: element, readyState: 'loading', addEventListener() {} },
+  window: { addEventListener() {}, location: new URL('http://localhost/'), history: { replaceState() {} } },
+  URL, URLSearchParams, console, setTimeout() {}, setInterval() {},
+  navigator: { clipboard: { writeText: t => copied.push(t) } }
+});
+const script = fs.readFileSync(process.argv[1], 'utf8');
+vm.runInContext(script, context);
+const testUrl = "http://127.0.0.1:6080/vnc.html?token=it's-a-key&test=\"quoted\"&unicode=Zażółć🧪";
+vm.runInContext(`
+  renderWorkspacePreview({
+    workspace_id: "ws-test",
+    name: "Test",
+    display: ":1",
+    ws_port: 6080,
+    rfb_port: 5900,
+    novnc_url: ${JSON.stringify(testUrl)},
+    engine: "native",
+    terminal_tabs: []
+  });
+`, context);
+
+const previewHtml = getElementById('previewArea').innerHTML;
+const hasInlineOnclick = /<button[^>]*id="copyWorkspaceUrlBtn"[^>]*onclick=/i.test(previewHtml);
+
+getElementById('copyWorkspaceUrlBtn').click();
+
+process.stdout.write(JSON.stringify({ copied, hasInlineOnclick }));
+"""
+    script = DASHBOARD_HTML.split("<script>", 1)[1].split("</script>", 1)[0]
+    import tempfile, os
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+        f.write(script)
+        temp_js = f.name
+    try:
+        run = subprocess.run([node, "-e", test_script, temp_js], capture_output=True, text=True, check=True)
+        out = json.loads(run.stdout)
+        expected_url = "http://127.0.0.1:6080/vnc.html?token=it's-a-key&test=\"quoted\"&unicode=Zażółć🧪"
+        assert out["hasInlineOnclick"] is False
+        assert out["copied"] == [expected_url]
+    finally:
+        os.unlink(temp_js)
+
+
+def test_digit_shortcuts_align_with_filtered_workspaces():
+    node = shutil.which("node")
+    assert node, "Test requires Node.js"
+    test_script = r"""
+const vm = require('node:vm');
+const fs = require('node:fs');
+const nodes = new Map();
+const listeners = new Map();
+let selectedWorkspace = null;
+const windowListeners = new Map();
+
+const element = id => {
+  const classes = new Set();
+  return {
+    id, innerHTML: '', textContent: '', value: '', style: {}, children: [],
+    addEventListener(kind, cb) {
+      if (!listeners.has(id)) listeners.set(id, new Map());
+      listeners.get(id).set(kind, cb);
+    },
+    appendChild(child) { this.children.push(child); },
+    classList: { add(x){classes.add(x)}, remove(x){classes.delete(x)}, toggle(){}, contains(x){return classes.has(x)} },
+    querySelectorAll() { return []; }
+  };
+};
+const getElementById = id => {
+  if (!nodes.has(id)) nodes.set(id, element(id));
+  return nodes.get(id);
+};
+const context = vm.createContext({
+  document: { getElementById, querySelectorAll: () => [], createElement: element, readyState: 'loading', addEventListener() {} },
+  window: {
+    addEventListener(kind, cb) { windowListeners.set(kind, cb); },
+    location: new URL('http://localhost/'), history: { replaceState() {} }
+  },
+  URL, URLSearchParams, console, setTimeout() {}, setInterval() {},
+  navigator: { clipboard: { writeText() {} } }
+});
+const script = fs.readFileSync(process.argv[1], 'utf8');
+vm.runInContext(script, context);
+vm.runInContext(`
+  activeWorkspaces = [
+    {workspace_id: "ws-codex", name: "Codex", engine: "native", tabs_count: 1, terminal_tabs: [{name: "codex", provider: "codex"}]},
+    {workspace_id: "ws-shell", name: "Shell", engine: "native", tabs_count: 1, terminal_tabs: [{name: "shell", provider: "shell"}]}
+  ];
+  selectWorkspace = id => { selectedWorkspace = id; };
+`, context);
+
+// Filter by "shell"
+getElementById('workspaceSearchInput').value = 'shell';
+vm.runInContext('renderWorkspacesBar();', context);
+
+// Trigger keydown '1'
+const keydownCb = windowListeners.get('keydown');
+keydownCb({ key: '1', ctrlKey: false, metaKey: false, altKey: false, preventDefault() {} });
+
+process.stdout.write(JSON.stringify({ selectedWorkspace: context.selectedWorkspace }));
+"""
+    script = DASHBOARD_HTML.split("<script>", 1)[1].split("</script>", 1)[0]
+    import tempfile, os
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+        f.write(script)
+        temp_js = f.name
+    try:
+        run = subprocess.run([node, "-e", test_script, temp_js], capture_output=True, text=True, check=True)
+        out = json.loads(run.stdout)
+        # Should select the 1st visible item (ws-shell), NOT the filtered out item (ws-codex)
+        assert out["selectedWorkspace"] == "ws-shell"
+    finally:
+        os.unlink(temp_js)
+
+
+
