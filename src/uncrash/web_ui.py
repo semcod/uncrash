@@ -429,6 +429,74 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       gap: 6px;
       white-space: nowrap;
     }
+    .workspace-search-input {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 0.78rem;
+      width: 170px;
+      transition: all 0.2s;
+    }
+    .workspace-search-input:focus {
+      border-color: var(--accent);
+      outline: none;
+      box-shadow: 0 0 6px rgba(137, 180, 250, 0.3);
+    }
+    .workspace-filter-pills {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+    }
+    .ws-filter-chip {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      border-radius: 12px;
+      padding: 2px 8px;
+      font-size: 0.72rem;
+      cursor: pointer;
+      transition: all 0.15s;
+      user-select: none;
+    }
+    .ws-filter-chip:hover, .ws-filter-chip.active {
+      background: var(--accent);
+      color: #11111b;
+      border-color: var(--accent);
+      font-weight: 700;
+    }
+    .workspace-details-disclosure {
+      background: rgba(24, 24, 37, 0.6);
+      border-top: 1px solid var(--border);
+      padding: 8px 16px;
+      font-size: 0.8rem;
+    }
+    .workspace-details-disclosure summary {
+      cursor: pointer;
+      font-weight: 600;
+      color: var(--accent);
+      user-select: none;
+    }
+    .workspace-details-disclosure summary:hover {
+      color: var(--accent-hover);
+    }
+    .workspace-details-body {
+      margin-top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .novnc-loader {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #11111b;
+      color: var(--text-muted);
+      font-size: 0.82rem;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+    }
     .workspace-chip {
       display: inline-flex;
       align-items: center;
@@ -607,7 +675,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   <div id="workspacesBar" class="workspaces-bar" style="display:none">
     <div class="workspaces-label">
-      <span>🖥️ noVNC Workspaces:</span>
+      <span>🖥️ noVNC:</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:8px">
+      <input type="text" id="workspaceSearchInput" class="workspace-search-input" placeholder="🔍 Szukaj workspace (/)..." oninput="renderWorkspacesBar()" aria-label="Filtruj aktywne workspace'y">
+      <div id="workspaceFilterPills" class="workspace-filter-pills">
+        <span class="ws-filter-chip active" data-filter="all" onclick="setWorkspaceFilter('all')">Wszystkie</span>
+        <span class="ws-filter-chip" data-filter="codex" onclick="setWorkspaceFilter('codex')">Codex</span>
+        <span class="ws-filter-chip" data-filter="agy" onclick="setWorkspaceFilter('agy')">Antigravity</span>
+        <span class="ws-filter-chip" data-filter="shell" onclick="setWorkspaceFilter('shell')">Shell</span>
+      </div>
     </div>
     <div id="workspacesChips" style="display:flex; gap:8px; align-items:center; flex:1; overflow-x:auto;"></div>
     <button class="btn" style="padding:3px 8px; font-size:0.75rem" onclick="fetchWorkspaces(true)">🔄 Odśwież</button>
@@ -616,6 +693,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div id="shortcutsBar" class="shortcuts-bar" style="display:none">
     <span>⌨️ <strong style="color:var(--text-main)">Skróty Testwins UX:</strong></span>
     <span><span class="kbd-hint">1-9</span> Przełącz workspace</span>
+    <span><span class="kbd-hint">/</span> Szukaj workspace</span>
     <span><span class="kbd-hint">F</span> Pełny ekran</span>
     <span><span class="kbd-hint">R</span> Odśwież strumień</span>
     <span><span class="kbd-hint">Esc</span> Zamknij podgląd</span>
@@ -923,6 +1001,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     let activeWorkspaces = [];
     let currentWorkspaceId = null;
+    let currentWorkspaceFilter = 'all';
+
+    function setWorkspaceFilter(filterKey) {
+      currentWorkspaceFilter = filterKey;
+      document.querySelectorAll('.ws-filter-chip').forEach(el => {
+        el.classList.toggle('active', el.getAttribute('data-filter') === filterKey);
+      });
+      renderWorkspacesBar();
+    }
+
+    function clearWorkspaceFilter() {
+      currentWorkspaceFilter = 'all';
+      const searchInput = document.getElementById('workspaceSearchInput');
+      if (searchInput) searchInput.value = '';
+      document.querySelectorAll('.ws-filter-chip').forEach(el => {
+        el.classList.toggle('active', el.getAttribute('data-filter') === 'all');
+      });
+      renderWorkspacesBar();
+    }
 
     async function fetchWorkspaces(notify = false) {
       try {
@@ -949,7 +1046,47 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
       bar.style.display = 'flex';
       if (shortcuts) shortcuts.style.display = 'flex';
-      chips.innerHTML = activeWorkspaces.map((ws, idx) => {
+
+      const searchInput = document.getElementById('workspaceSearchInput');
+      const query = (searchInput ? searchInput.value : '').toLowerCase().trim();
+
+      const filtered = activeWorkspaces.filter(ws => {
+        const nameMatch = (ws.name || '').toLowerCase().includes(query) ||
+                          (ws.workspace_id || '').toLowerCase().includes(query) ||
+                          (ws.project_path || '').toLowerCase().includes(query);
+        const tabs = ws.terminal_tabs || [];
+        const tabMatch = tabs.some(t =>
+          (t.name || '').toLowerCase().includes(query) ||
+          (t.title || '').toLowerCase().includes(query) ||
+          (t.provider || '').toLowerCase().includes(query) ||
+          (t.command || '').toLowerCase().includes(query)
+        );
+        const textOk = !query || nameMatch || tabMatch;
+
+        let filterOk = true;
+        if (currentWorkspaceFilter !== 'all') {
+          if (currentWorkspaceFilter === 'codex') {
+            filterOk = tabs.some(t => (t.provider || '').toLowerCase() === 'codex' || (t.name || '').toLowerCase().includes('codex'));
+          } else if (currentWorkspaceFilter === 'agy') {
+            filterOk = tabs.some(t => (t.provider || '').toLowerCase() === 'agy' || (t.name || '').toLowerCase().includes('agy'));
+          } else if (currentWorkspaceFilter === 'shell') {
+            filterOk = tabs.some(t => (t.provider || '').toLowerCase() === 'shell' || (t.name || '').toLowerCase().includes('shell'));
+          }
+        }
+        return textOk && filterOk;
+      });
+
+      if (filtered.length === 0) {
+        chips.innerHTML = `
+          <div class="workspaces-empty-hint" style="color:var(--text-muted); font-size:0.8rem; padding:4px 8px; display:flex; align-items:center; gap:8px">
+            <span>Brak pasujących workspace'ów</span>
+            <button class="btn" style="padding:2px 6px; font-size:0.7rem" onclick="clearWorkspaceFilter()">Wyczyść</button>
+          </div>
+        `;
+        return;
+      }
+
+      chips.innerHTML = filtered.map((ws, idx) => {
         const isActive = ws.workspace_id === currentWorkspaceId;
         const shortName = ws.name || ws.workspace_id;
         const kbdHint = idx < 9 ? `<span class="kbd-hint">${idx + 1}</span>` : '';
@@ -1070,6 +1207,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }).join(' ');
       const tabsBarHtml = tabChips ? `<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap"><span style="font-size:0.75rem; color:var(--text-muted)">Zregenerowane taby:</span> ${tabChips}</div>` : '';
 
+      const tabDetailRows = (ws.terminal_tabs || []).map((t, idx) => `
+        <div style="background:#181825; padding:6px 10px; border-radius:6px; border:1px solid #313244; font-size:0.75rem; display:flex; justify-content:space-between; align-items:center; gap:8px">
+          <span style="font-weight:600; color:var(--text-main)">[${idx}] ${escapeHtml(t.name || t.title || t.provider)} <small style="color:var(--text-muted)">(${escapeHtml(t.provider || 'shell')})</small></span>
+          <code style="color:var(--yellow); font-family:var(--font-mono); font-size:0.72rem; word-break:break-all">${escapeHtml(t.command || 'exec bash')}</code>
+        </div>
+      `).join('');
+
+      const disclosureHtml = `
+        <details class="workspace-details-disclosure">
+          <summary>🔍 Zaawansowane parametry sesji i polecenia tabów</summary>
+          <div class="workspace-details-body">
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; margin-bottom:6px">
+              <div class="metric-card"><div class="label">Katalog projektu</div><div class="val" style="font-size:0.78rem">${escapeHtml(ws.project_path || '—')}</div></div>
+              <div class="metric-card"><div class="label">Ekran / Porty</div><div class="val" style="font-size:0.78rem">${escapeHtml(ws.display || '—')} (WS: ${ws.ws_port}, RFB: ${ws.rfb_port})</div></div>
+              <div class="metric-card"><div class="label">Silnik wirtualizacji</div><div class="val" style="font-size:0.78rem">${escapeHtml(ws.engine || 'native')}</div></div>
+              <div class="metric-card"><div class="label">Czas utworzenia</div><div class="val" style="font-size:0.78rem">${escapeHtml(ws.created_at || '—')}</div></div>
+            </div>
+            ${tabDetailRows ? `<div style="display:flex; flex-direction:column; gap:4px">${tabDetailRows}</div>` : ''}
+          </div>
+        </details>
+      `;
+
       area.innerHTML = `
         <div class="novnc-container">
           <div style="background:var(--bg-surface); padding:10px 16px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); flex-wrap:wrap; gap:8px">
@@ -1083,6 +1242,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 ${stagingInfo}
               </div>
               ${tabsBarHtml}
+              <details class="workspace-details-disclosure">
+                <summary>📋 Szczegóły sesji i metadane środowiska</summary>
+                <div class="workspace-details-body">
+                  <div><strong>Identyfikator sesji:</strong> <code>${ws.workspace_id}</code></div>
+                  <div><strong>Silnik:</strong> ${ws.engine || 'native'}</div>
+                  <div><strong>Wyświetlacz:</strong> <code>${ws.display || 'N/A'}</code> · WebSocket: <code>${ws.ws_port || 'N/A'}</code> · RFB: <code>${ws.rfb_port || 'N/A'}</code></div>
+                  ${ws.workspace_dir ? `<div><strong>Staging:</strong> <code>${ws.workspace_dir}</code> (${ws.staged_files_count || 0} plików)</div>` : ''}
+                  ${ws.project_path ? `<div><strong>Ścieżka projektu:</strong> <code>${ws.project_path}</code></div>` : ''}
+                  <div><strong>Karty terminala:</strong> ${tabsCount} aktywnych</div>
+                </div>
+              </details>
             </div>
             <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
               <button class="btn" onclick="copyWorkspaceUrl('${ws.novnc_url}')" style="padding:4px 10px; font-size:0.75rem" title="Skopiuj bezpośredni URL noVNC">📋 Kopiuj link noVNC</button>
@@ -1093,7 +1263,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <button class="btn" onclick="closePreviewArea()" style="padding:4px 10px; font-size:0.75rem" title="Ukryj podgląd (Skrót: Esc)">✕ Ukryj</button>
             </div>
           </div>
-          <iframe id="novncIframe" src="${ws.novnc_url}" class="novnc-frame" style="height:680px"></iframe>
+          ${disclosureHtml}
+          <div id="novncLoader" class="novnc-loader">
+            <span class="status-pulse"></span>
+            <span>Nawiązywanie połączenia ze zdalnym pulpitem <strong>${escapeHtml(ws.workspace_id)}</strong>...</span>
+          </div>
+          <iframe id="novncIframe" src="${ws.novnc_url}" class="novnc-frame" style="height:680px" onload="document.getElementById('novncLoader')?.remove()"></iframe>
         </div>
       `;
     }
@@ -1470,10 +1645,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     });
 
     window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const searchInput = document.getElementById('workspaceSearchInput');
+        if (searchInput && document.activeElement === searchInput) {
+          searchInput.value = '';
+          searchInput.blur();
+          renderWorkspacesBar();
+          return;
+        }
+      }
+
       const tag = document.activeElement ? (document.activeElement.tagName || '').toLowerCase() : '';
       if (tag === 'input' || tag === 'textarea' || (document.activeElement && document.activeElement.isContentEditable)) return;
 
-      if (e.key >= '1' && e.key <= '9' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const searchInput = document.getElementById('workspaceSearchInput');
+        if (searchInput) {
+          e.preventDefault();
+          searchInput.focus();
+          searchInput.select();
+        }
+      } else if (e.key >= '1' && e.key <= '9' && !e.ctrlKey && !e.metaKey && !e.altKey) {
         const idx = parseInt(e.key, 10) - 1;
         if (activeWorkspaces && activeWorkspaces[idx]) {
           e.preventDefault();
@@ -1491,6 +1683,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           e.preventDefault();
           reloadNovncIframe();
           showToast('Odświeżono strumień noVNC');
+        }
+      } else if (e.key === '/' || ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K'))) {
+        const searchInput = document.getElementById('workspaceSearchInput');
+        if (searchInput) {
+          e.preventDefault();
+          searchInput.focus();
+          searchInput.select();
         }
       } else if (e.key === 'Escape') {
         const container = document.querySelector('.novnc-container');

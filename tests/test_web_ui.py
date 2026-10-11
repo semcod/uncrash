@@ -228,6 +228,10 @@ def test_testwins_ux_styles_and_shortcuts_bar():
     assert "status-pulse" in DASHBOARD_HTML
     assert "shortcutsBar" in DASHBOARD_HTML
     assert "novnc-container.fullscreen" in DASHBOARD_HTML
+    assert "workspace-search-input" in DASHBOARD_HTML
+    assert "workspace-filter-pills" in DASHBOARD_HTML
+    assert "workspace-details-disclosure" in DASHBOARD_HTML
+    assert "novnc-loader" in DASHBOARD_HTML
 
 
 def test_testwins_ux_workspaces_bar_rendering():
@@ -239,23 +243,35 @@ const fs = require('node:fs');
 const nodes = new Map();
 const element = () => ({innerHTML: '', textContent: '', value: '', style: {}, children: [],
   addEventListener() {}, appendChild(child) { this.children.push(child); },
-  classList: {add() {}, remove() {}}});
+  classList: {add() {}, remove() {}, toggle() {}},
+  querySelectorAll() { return []; }});
 const getElementById = id => {
   if (!nodes.has(id)) nodes.set(id, element());
   return nodes.get(id);
 };
 const context = vm.createContext({
-  document: {getElementById, createElement: element, readyState: 'loading', addEventListener() {}},
+  document: {getElementById, querySelectorAll: () => [], createElement: element, readyState: 'loading', addEventListener() {}},
   window: {addEventListener() {}, location: new URL('http://localhost/'), history: {replaceState() {}}},
   URL, URLSearchParams, console, setTimeout() {}, setInterval() {}, navigator: {clipboard: {writeText() {}}}
 });
 const script = fs.readFileSync(process.argv[1], 'utf8');
 vm.runInContext(script, context);
-vm.runInContext('activeWorkspaces = [{workspace_id: "ws-uncrash", name: "Uncrash", engine: "native", tabs_count: 3}, {workspace_id: "ws-twinerd", name: "Twinerd", engine: "native", tabs_count: 2}]; renderWorkspacesBar();', context);
+vm.runInContext('activeWorkspaces = [{workspace_id: "ws-uncrash", name: "Uncrash", engine: "native", tabs_count: 3, terminal_tabs: [{name: "codex", provider: "codex"}]}, {workspace_id: "ws-twinerd", name: "Twinerd", engine: "native", tabs_count: 2, terminal_tabs: [{name: "shell", provider: "shell"}]}]; renderWorkspacesBar();', context);
 const chipsHtml = getElementById('workspacesChips').innerHTML;
 const barDisplay = getElementById('workspacesBar').style.display;
 const shortcutsDisplay = getElementById('shortcutsBar').style.display;
-process.stdout.write(JSON.stringify({chipsHtml, barDisplay, shortcutsDisplay}));
+
+// Test filter query
+getElementById('workspaceSearchInput').value = 'Twinerd';
+vm.runInContext('renderWorkspacesBar();', context);
+const filteredChipsHtml = getElementById('workspacesChips').innerHTML;
+
+// Test empty state
+getElementById('workspaceSearchInput').value = 'nonexistent-project-xyz';
+vm.runInContext('renderWorkspacesBar();', context);
+const emptyChipsHtml = getElementById('workspacesChips').innerHTML;
+
+process.stdout.write(JSON.stringify({chipsHtml, barDisplay, shortcutsDisplay, filteredChipsHtml, emptyChipsHtml}));
 """
     script = DASHBOARD_HTML.split("<script>", 1)[1].split("</script>", 1)[0]
     import tempfile, os
@@ -270,5 +286,69 @@ process.stdout.write(JSON.stringify({chipsHtml, barDisplay, shortcutsDisplay}));
         assert "kbd-hint" in out["chipsHtml"]
         assert "Uncrash" in out["chipsHtml"]
         assert "Twinerd" in out["chipsHtml"]
+        assert "Twinerd" in out["filteredChipsHtml"]
+        assert "Uncrash" not in out["filteredChipsHtml"]
+        assert "workspaces-empty-hint" in out["emptyChipsHtml"]
     finally:
         os.unlink(temp_js)
+
+
+def test_testwins_ux_progressive_disclosure_rendering():
+    node = shutil.which("node")
+    assert node
+    test_script = r"""
+const vm = require('node:vm');
+const fs = require('node:fs');
+const nodes = new Map();
+const element = () => ({innerHTML: '', textContent: '', value: '', style: {}, children: [],
+  addEventListener() {}, appendChild(child) { this.children.push(child); },
+  classList: {add() {}, remove() {}, toggle() {}},
+  querySelectorAll() { return []; }});
+const getElementById = id => {
+  if (!nodes.has(id)) nodes.set(id, element());
+  return nodes.get(id);
+};
+const context = vm.createContext({
+  document: {getElementById, querySelectorAll: () => [], createElement: element, readyState: 'loading', addEventListener() {}},
+  window: {addEventListener() {}, location: new URL('http://localhost/'), history: {replaceState() {}}},
+  URL, URLSearchParams, console, setTimeout() {}, setInterval() {}, navigator: {clipboard: {writeText() {}}}
+});
+const script = fs.readFileSync(process.argv[1], 'utf8');
+vm.runInContext(script, context);
+vm.runInContext(`
+  renderWorkspacePreview({
+    workspace_id: "ws-uncrash",
+    name: "Uncrash",
+    display: ":183",
+    ws_port: 6100,
+    rfb_port: 5900,
+    novnc_url: "http://127.0.0.1:6100/vnc.html",
+    project_path: "/home/tom/github/semcod/uncrash",
+    engine: "native",
+    tabs_count: 2,
+    terminal_tabs: [
+      {name: "codex", provider: "codex", command: "codex resume 01a126f1"},
+      {name: "shell", provider: "shell", command: "exec bash"}
+    ]
+  });
+`, context);
+const previewHtml = getElementById('previewArea').innerHTML;
+process.stdout.write(JSON.stringify({previewHtml}));
+"""
+    script = DASHBOARD_HTML.split("<script>", 1)[1].split("</script>", 1)[0]
+    import tempfile, os
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+        f.write(script)
+        temp_js = f.name
+    try:
+        run = subprocess.run([node, "-e", test_script, temp_js], capture_output=True, text=True, check=True)
+        out = json.loads(run.stdout)
+        html = out["previewHtml"]
+        assert "workspace-details-disclosure" in html
+        assert "novncLoader" in html
+        assert "codex resume 01a126f1" in html
+        assert "exec bash" in html
+        assert "/home/tom/github/semcod/uncrash" in html
+    finally:
+        os.unlink(temp_js)
+
