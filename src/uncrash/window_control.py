@@ -8,6 +8,10 @@ import time
 from .store import RecoveryError
 
 
+class _InventoryChanged(RecoveryError):
+    """A client disappeared while the window manager refreshed its list."""
+
+
 def require_process_consent(entire_process):
     if entire_process is not True:
         raise RecoveryError(
@@ -71,7 +75,7 @@ class _X11Windows:
             try:
                 result.append(self._describe(self.connection.create_resource_object('window', int(xid))))
             except self.error.BadWindow:
-                raise RecoveryError('Window inventory changed; observe it again') from None
+                raise _InventoryChanged('Window inventory changed; observe it again') from None
         return result
 
     def request_close(self, expected):
@@ -145,6 +149,12 @@ def close_one_window(xid, pid, start_ticks, *, title=None, wait_seconds=2.0, dry
             try:
                 after = backend.read()
                 same_process = _process_start(pid) == str(start_ticks)
+            except _InventoryChanged:
+                if time.monotonic() >= deadline:
+                    result.update(status='verification-unavailable', other_windows_preserved=None)
+                    return result
+                time.sleep(min(.05, max(0, deadline - time.monotonic())))
+                continue
             except (OSError, RecoveryError):
                 result['status'] = 'verification-unavailable'
                 return result

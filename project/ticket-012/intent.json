@@ -17,7 +17,8 @@
     "tests/test_window_control.py",
     "src/uncrash/api.py",
     "src/uncrash/health.py",
-    "tests/test_health.py"
+    "tests/test_health.py",
+    "tests/test_api.py"
   ],
   "forbiddenPaths": [
     "project/ticket-*/user-*.md"

@@ -73,3 +73,11 @@ The full base-runtime suite passed 213 tests with 9 opt-in skips, including the 
 
 This directory contains the minimal reviewed intent. Optional participant prose
 and raw command logs are not required delivery output.
+
+## Native qualification continuation
+
+Native qualification found a host-dependent API inventory test and transient X11 startup/teardown observations. Use explicit synthetic installed/empty inventory fixtures, await the owned window manager redirect subscription before creating clients, and retry only a typed client-list change within the existing close deadline. Preserve process identity and peer-window checks; send no additional close request or signal. Existing PR10 must receive fresh exact-head verification and independent review after this material follow-up.
+
+Follow-up validation: 84 focused API/window tests and 216 complete product tests pass with 9 existing opt-in skips. Managed governance passes. AC-11 remains pending fresh native qualification and protected exact-head publication.
+
+- [ ] AC-11: Native canary verifies deterministic installed/empty API fixtures and bounded transient X11 observation without additional close requests or process signals; fresh independent review covers the resulting head.

@@ -86,6 +86,29 @@ def test_hung_window_stays_requested_without_force_fallback(backend):
     assert backend.requests == [4] and len(backend.windows) == 4
 
 
+@pytest.mark.parametrize('persistent', [False, True])
+def test_close_observation_retries_only_transient_inventory_within_deadline(backend, monkeypatch, persistent):
+    read = backend.read
+    failures = []
+
+    def racing_read():
+        if backend.requests and (persistent or not failures):
+            failures.append(True)
+            raise control._InventoryChanged('Window inventory changed; observe it again')
+        return read()
+
+    monkeypatch.setattr(backend, 'read', racing_read)
+    backend.on_close = lambda b: setattr(b, 'windows', b.windows[:-1])
+    result = control.close_one_window(4, 123, '456', wait_seconds=0 if persistent else 1)
+    assert failures == [True] and backend.requests == [4]
+    assert result['process_signals_sent'] is False
+    if persistent:
+        assert result['status'] == 'verification-unavailable'
+        assert not result['closure_verified'] and result['other_windows_preserved'] is None
+    else:
+        assert result['status'] == 'closed' and result['other_windows_preserved']
+
+
 @pytest.mark.parametrize('kwargs', [
     {'xid': 9}, {'pid': 999}, {'start_ticks': '789'}, {'title': 'different'},
 ])
@@ -262,7 +285,8 @@ def test_real_x11_four_windows_one_process_close_one(monkeypatch):
         connection = display.Display(name)
         root = connection.screen().root
         end = time.monotonic() + 5
-        while root.get_full_property(connection.intern_atom('_NET_SUPPORTING_WM_CHECK'), Xatom.WINDOW) is None:
+        while (root.get_full_property(connection.intern_atom('_NET_SUPPORTING_WM_CHECK'), Xatom.WINDOW) is None
+               or not root.get_attributes().all_event_masks & X.SubstructureRedirectMask):
             assert time.monotonic() < end, 'Owned window manager did not start'
             time.sleep(.05)
         windows = []

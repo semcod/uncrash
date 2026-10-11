@@ -244,8 +244,15 @@ def test_workspace_endpoints(tmp_path, monkeypatch):
     assert close_pel.json()["closed"] is True
 
 
-def test_gpu_and_applications_endpoints():
+def test_gpu_and_applications_endpoints(monkeypatch):
     from fastapi.testclient import TestClient
+    from uncrash import inventory
+    monkeypatch.setattr(inventory, 'desktop_inventory', lambda: [
+        {'id': 'jetbrains-pycharm', 'name': 'Synthetic PyCharm',
+         'executable': '/fixture/pycharm', 'executable_present': True},
+        {'id': 'cli-tmux', 'name': 'Synthetic terminal',
+         'executable': '/fixture/tmux', 'executable_present': True},
+    ])
     app = create_fastapi_app()
     client = TestClient(app)
 
@@ -280,7 +287,19 @@ def test_gpu_and_applications_endpoints():
     # Check that at least some apps have active recovery profiles
     all_apps = [a for cat in categories.values() for a in cat.get('apps', [])]
     has_profile_apps = [a for a in all_apps if a.get("has_recovery_profile")]
-    assert len(has_profile_apps) >= 1
+    assert [(a['id'], a['profile_id']) for a in has_profile_apps] == [
+        ('jetbrains-pycharm', 'jetbrains-settings')]
+
+
+def test_applications_endpoint_accepts_empty_installed_inventory(monkeypatch):
+    from fastapi.testclient import TestClient
+    from uncrash import inventory
+    monkeypatch.setattr(inventory, 'desktop_inventory', lambda: [])
+    response = TestClient(create_fastapi_app()).get('/api/v1/system/applications')
+    assert response.status_code == 200
+    data = response.json()
+    assert data['total_installed'] == 0
+    assert all(category['apps'] == [] for category in data['categories'].values())
 
 
 
