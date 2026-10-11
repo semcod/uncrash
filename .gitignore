@@ -9,9 +9,10 @@
 /.subactor/snapshots/
 /.governance/.observation-failures.log
 
-.cursor/rules
-.githooks
-.github
-.governance
 .idea
-.subactor
+
+# Repository-local worktrees and operational state
+*.egg-info/
+*.egg
+build/
+dist/

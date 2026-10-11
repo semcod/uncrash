@@ -38,6 +38,7 @@ where = ["src"]
 uncrash = ["systemd/*.service", "snapshot.rs", "errors/*.md"]
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-ra -p wellmanifest_governance"
 
@@ -45,7 +46,8 @@ addopts = "-ra -p wellmanifest_governance"
 "share/uncrash" = [".env.example"]
 
 [tool.wellmanifest]
-standard = "0.20.91"
-revision = "a8c1f9a6ff46d957195b8b5814c5c4df9e0a28d2"
+standard = "0.20.92"
+revision = "fcbb13e0ae04c688d825d5a87e2d2721dfab483d"
 gate = "project/governance-check.sh"
+
 

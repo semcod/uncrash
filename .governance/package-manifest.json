@@ -696,6 +696,12 @@
       "target": ".governance/reusable-workflows.schema.json",
       "strategy": "managed",
       "executable": false
+    },
+    {
+      "source": "error/GOV-VERSION.md",
+      "target": ".governance/error/GOV-VERSION.md",
+      "strategy": "managed",
+      "executable": false
     }
   ]
 }
