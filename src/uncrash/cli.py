@@ -15,6 +15,7 @@ from .native import discover, selected_config, save_config
 from .runtime import Launcher, recover_at_startup, run_daemon
 from .store import RecoveryError, Store, build_native, no_links, private_dir, profiles, write_file
 from .window_control import close_one_window, require_process_consent, window_inventory
+from .health import inspect_health
 from .recovery import (export_bundle, import_bundle, transfer_bundle, jetbrains_state,
                        detected_gui_apps, close_gui_app, find_pycharm_executable, jetbrains_projects, restore_pycharm)
 
@@ -85,6 +86,14 @@ def main(argv=None):
     parser.add_argument('--encrypt', action=argparse.BooleanOptionalAction, default=None)
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('inventory')
+    doctor = sub.add_parser('doctor', help='Read-only freeze risk inspection before adding application load')
+    doctor.add_argument('--log-dir', type=Path)
+    doctor.add_argument('--thread-dump', type=Path, help='Existing Java thread dump; does not attach to the JVM')
+    doctor.add_argument('--project', type=Path)
+    doctor.add_argument('--pid', type=int)
+    doctor.add_argument('--start-ticks')
+    doctor.add_argument('--max-age-seconds', type=int, default=600)
+    doctor.add_argument('--preflight', action='store_true', help='Exit 0 for no risk observed, 1 warning, 2 critical, 3 unknown')
     diagnostic = sub.add_parser('diagnose', help='Read-only session origins and backup health')
     diagnostic.add_argument('--output', type=Path, help='New private report directory')
     native = sub.add_parser('profiles', help='Discover or explicitly select native durable data')
@@ -167,6 +176,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     try:
+        if args.command == 'doctor':
+            report = inspect_health(log_dir=args.log_dir, thread_dump=args.thread_dump,
+                                    project=args.project, pid=args.pid, expected_start=args.start_ticks,
+                                    max_age_seconds=args.max_age_seconds)
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return report['preflight_exit_code'] if args.preflight else 0
         if args.command == 'inventory':
             print(json.dumps(desktop_inventory(), ensure_ascii=False, indent=2)); return 0
         if args.command == 'jetbrains':

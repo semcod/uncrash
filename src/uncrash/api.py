@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from .recovery import detected_gui_apps, close_gui_app, jetbrains_state
 from .window_control import require_process_consent
+from .health import inspect_health
 from .store import RecoveryError
 from .inventory import desktop_inventory
 from .web_ui import DASHBOARD_HTML
@@ -17,6 +18,21 @@ from .web_ui import DASHBOARD_HTML
 
 # Universal API Registry conforming to wellmanifest/nl-api-llm
 OPERATIONS_REGISTRY = [
+    {
+        "id": "uncrash.health.inspect",
+        "name": "inspect_health",
+        "description": "Read-only, bounded freeze risk inspection of existing IDE evidence and system pressure. No JVM attach or recovery effects.",
+        "protocols": ["cli", "rest", "mcp"],
+        "schema": "uncrash.health/v1",
+        "parameters": {
+            "log_dir": {"type": "string", "required": False},
+            "thread_dump": {"type": "string", "required": False},
+            "project": {"type": "string", "required": False},
+            "pid": {"type": "integer", "required": False},
+            "expected_start": {"type": "string", "required": False},
+            "max_age_seconds": {"type": "integer", "default": 600}
+        }
+    },
     {
         "id": "uncrash.apps.list",
         "name": "list_gui_apps",
@@ -216,6 +232,16 @@ def create_fastapi_app(store=None, config=None):
     @app.get("/api/v1/jetbrains")
     def get_jetbrains():
         return jetbrains_state()
+
+    @app.get('/api/v1/doctor')
+    def get_doctor(log_dir: Optional[str] = None, thread_dump: Optional[str] = None,
+                   project: Optional[str] = None, pid: Optional[int] = None,
+                   expected_start: Optional[str] = None, max_age_seconds: int = 600):
+        try:
+            return inspect_health(log_dir=log_dir, thread_dump=thread_dump, project=project,
+                                  pid=pid, expected_start=expected_start, max_age_seconds=max_age_seconds)
+        except RecoveryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/v1/inventory")
     def get_inventory():
@@ -427,6 +453,17 @@ def create_mcp_server(store=None, config=None):
     def mcp_list_gui_apps() -> str:
         apps = detected_gui_apps()
         return json.dumps({"count": len(apps), "applications": apps}, ensure_ascii=False, indent=2)
+
+    @mcp.tool(name='uncrash_inspect_health', description='Read-only freeze risk preflight from existing IDE logs/dump and system pressure; no JVM attach or process signals.')
+    def mcp_health(log_dir: Optional[str] = None, thread_dump: Optional[str] = None,
+                   project: Optional[str] = None, pid: Optional[int] = None,
+                   expected_start: Optional[str] = None, max_age_seconds: int = 600) -> str:
+        try:
+            return json.dumps(inspect_health(log_dir=log_dir, thread_dump=thread_dump, project=project,
+                                            pid=pid, expected_start=expected_start,
+                                            max_age_seconds=max_age_seconds), ensure_ascii=False)
+        except RecoveryError as exc:
+            raise ToolError(str(exc)) from exc
 
     @mcp.tool(
         name="uncrash_close_gui_app",
