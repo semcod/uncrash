@@ -1000,6 +1000,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     let activeWorkspaces = [];
+    let visibleWorkspaces = [];
     let currentWorkspaceId = null;
     let currentWorkspaceFilter = 'all';
 
@@ -1075,6 +1076,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         }
         return textOk && filterOk;
       });
+
+      visibleWorkspaces = filtered;
 
       if (filtered.length === 0) {
         chips.innerHTML = `
@@ -1255,11 +1258,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               </details>
             </div>
             <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
-              <button class="btn" onclick="copyWorkspaceUrl('${ws.novnc_url}')" style="padding:4px 10px; font-size:0.75rem" title="Skopiuj bezpośredni URL noVNC">📋 Kopiuj link noVNC</button>
+              <button id="copyWorkspaceUrlBtn" class="btn" style="padding:4px 10px; font-size:0.75rem" title="Skopiuj bezpośredni URL noVNC">📋 Kopiuj link noVNC</button>
               <button id="fullscreenToggleBtn" class="btn" onclick="toggleFullscreenWorkspace()" style="padding:4px 10px; font-size:0.75rem" title="Przełącz pełny ekran (Skrót: F)">⛶ Pełny ekran (F)</button>
-              <a href="${ws.novnc_url}" target="_blank" class="btn" style="padding:4px 10px; font-size:0.75rem">Otwórz w nowej karcie ↗</a>
+              <a href="${escapeHtml(ws.novnc_url)}" target="_blank" class="btn" style="padding:4px 10px; font-size:0.75rem">Otwórz w nowej karcie ↗</a>
               <button class="btn" onclick="reloadNovncIframe()" style="padding:4px 10px; font-size:0.75rem" title="Odśwież strumień (Skrót: R)">🔄 Odśwież (R)</button>
-              <button class="btn" onclick="closeWorkspace('${ws.workspace_id}')" style="padding:4px 10px; font-size:0.75rem; color:var(--red); border-color:var(--red)">✕ Zamknij</button>
+              <button id="closeWorkspaceBtn" class="btn" style="padding:4px 10px; font-size:0.75rem; color:var(--red); border-color:var(--red)">✕ Zamknij</button>
               <button class="btn" onclick="closePreviewArea()" style="padding:4px 10px; font-size:0.75rem" title="Ukryj podgląd (Skrót: Esc)">✕ Ukryj</button>
             </div>
           </div>
@@ -1268,9 +1271,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span class="status-pulse"></span>
             <span>Nawiązywanie połączenia ze zdalnym pulpitem <strong>${escapeHtml(ws.workspace_id)}</strong>...</span>
           </div>
-          <iframe id="novncIframe" src="${ws.novnc_url}" class="novnc-frame" style="height:680px"></iframe>
+          <iframe id="novncIframe" src="${escapeHtml(ws.novnc_url)}" class="novnc-frame" style="height:680px"></iframe>
         </div>
       `;
+      const copyBtn = document.getElementById('copyWorkspaceUrlBtn');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', () => {
+          copyWorkspaceUrl(ws.novnc_url);
+        });
+      }
+      const closeBtn = document.getElementById('closeWorkspaceBtn');
+      if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
+          closeWorkspace(ws.workspace_id);
+        });
+      }
       const iframe = document.getElementById('novncIframe');
       if (iframe) {
         iframe.addEventListener('load', () => {
@@ -1674,10 +1689,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         }
       } else if (e.key >= '1' && e.key <= '9' && !e.ctrlKey && !e.metaKey && !e.altKey) {
         const idx = parseInt(e.key, 10) - 1;
-        if (activeWorkspaces && activeWorkspaces[idx]) {
+        const searchInput = document.getElementById('workspaceSearchInput');
+        const hasFilter = (searchInput && searchInput.value.trim().length > 0) || currentWorkspaceFilter !== 'all';
+        const targetList = hasFilter ? visibleWorkspaces : ((visibleWorkspaces && visibleWorkspaces.length > 0) ? visibleWorkspaces : activeWorkspaces);
+        if (targetList && targetList[idx]) {
           e.preventDefault();
-          selectWorkspace(activeWorkspaces[idx].workspace_id);
-          showToast(`Przełączono na workspace [${idx + 1}]: ${activeWorkspaces[idx].name || activeWorkspaces[idx].workspace_id}`);
+          selectWorkspace(targetList[idx].workspace_id);
+          showToast(`Przełączono na workspace [${idx + 1}]: ${targetList[idx].name || targetList[idx].workspace_id}`);
         }
       } else if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) {
         const container = document.querySelector('.novnc-container');
