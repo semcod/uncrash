@@ -297,12 +297,12 @@ def test_extract_preview_metadata():
     t0 = meta['terminal_tabs'][0]
     assert t0['provider'] == 'codex'
     assert t0['cwd'] == '/home/tom/proj-a'
-    assert t0['resume_command'] == 'codex resume --last'
+    assert t0['resume_command'] == 'exec bash'
     # Check agy client tab
     t1 = meta['terminal_tabs'][1]
     assert t1['provider'] == 'agy'
     assert t1['cwd'] == '/home/tom/proj-b'
-    assert t1['resume_command'] == 'agy --continue'
+    assert t1['resume_command'] == 'exec bash'
     # Check jetbrains descendant tab
     t2 = meta['terminal_tabs'][2]
     assert t2['cwd'] == '/home/tom/proj-ide'

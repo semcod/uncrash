@@ -123,6 +123,11 @@ def get_virtualization_engines() -> List[Dict[str, Any]]:
     return results
 
 
+def _terminal_arguments(title: str, cwd: str) -> List[str]:
+    return ['--tab', f'--title={title}', f'--working-directory={cwd}',
+            '--', 'bash', '-c', 'exec bash']
+
+
 def extract_preview_metadata(manifest: Dict[str, Any], snapshot_id: Optional[str] = None) -> Dict[str, Any]:
     """Extract terminal tabs, GUI applications, and project roots from a snapshot manifest."""
     sid = snapshot_id or manifest.get('id', 'unknown')
@@ -159,17 +164,9 @@ def extract_preview_metadata(manifest: Dict[str, Any], snapshot_id: Optional[str
         dir_name = Path(cwd).name or cwd
         title = f"{app_name} ({dir_name})"
 
-        if provider == 'codex':
-            resume_cmd = "codex resume --last"
-        elif provider == 'agy':
-            resume_cmd = "agy --continue"
-        elif provider == 'claude':
-            resume_cmd = "claude"
-        else:
-            resume_cmd = "exec bash"
-
-        # Safe bash wrapper that runs resume command and stays in shell
-        shell_script = f"cd {shlex.quote(cwd)} && {resume_cmd}; exec bash"
+        # Provider/cwd and recorded IDs do not establish a verified conversation.
+        resume_cmd = "exec bash"
+        shell_script = f"cd {shlex.quote(cwd)} && {resume_cmd}"
 
         terminal_tabs.append({
             'title': title,
@@ -181,15 +178,7 @@ def extract_preview_metadata(manifest: Dict[str, Any], snapshot_id: Optional[str
             'pid': p.get('pid'),
             'resume_command': resume_cmd,
             'shell_script': shell_script,
-            'gnome_terminal_args': [
-                '--tab',
-                f'--title={title}',
-                f'--working-directory={cwd}',
-                '--',
-                'bash',
-                '-c',
-                f'{resume_cmd}; exec bash'
-            ]
+            'gnome_terminal_args': _terminal_arguments(title, cwd)
         })
 
     # Also check JetBrains descendants with open terminals
@@ -217,13 +206,7 @@ def extract_preview_metadata(manifest: Dict[str, Any], snapshot_id: Optional[str
                         'pid': d.get('pid'),
                         'resume_command': 'exec bash',
                         'shell_script': f"cd {shlex.quote(cwd)}; exec bash",
-                        'gnome_terminal_args': [
-                            '--tab',
-                            f'--title={title}',
-                            f'--working-directory={cwd}',
-                            '--',
-                            'bash'
-                        ]
+                        'gnome_terminal_args': _terminal_arguments(title, cwd)
                     })
 
     # Construct the full gnome-terminal launch invocation
@@ -319,7 +302,9 @@ def launch_terminal_tabs(terminal_tabs: List[Dict[str, Any]], *, dry_run: bool =
 
     cmd = ['gnome-terminal']
     for tab in terminal_tabs:
-        cmd.extend(tab['gnome_terminal_args'])
+        # Rebuild the plan: cached commands and terminal arguments are only data.
+        cmd.extend(_terminal_arguments(tab.get('title') or 'Terminal',
+                                       tab.get('cwd') or str(Path.home())))
 
     if dry_run:
         return {
@@ -474,7 +459,6 @@ class VirtualPreviewDesktop:
                 for idx, tab in enumerate(tabs[:6]):
                     prov = (tab.get('provider') or 'shell').upper()
                     cwd = tab.get('cwd') or str(Path.home())
-                    resume_cmd = tab.get('resume_command') or 'echo Ready'
                     col = idx % cols
                     row = idx // cols
                     pos_x = 30 + (col * (1200 // cols))
@@ -484,15 +468,12 @@ class VirtualPreviewDesktop:
                     engine_name = engine_meta.get('name', engine.upper())
                     banner = f"{engine_name} [{prov}]: {tab.get('title')}"
                     title_prefix = f"[{engine.upper()}-{prov}]" if engine != "native" else f"[{prov}]"
-                    sh_cmd = (
-                        f"cd '{cwd}' && "
-                        f"echo '=== {banner} ===' && "
-                        f"echo 'Silnik:          {engine.upper()}' && "
-                        f"echo 'Katalog roboczy: {cwd}' && "
-                        f"echo 'Wznowienie:      {resume_cmd}' && "
-                        f"echo '===================================================' && "
-                        f"{resume_cmd}; exec bash"
-                    )
+                    lines = [f"=== {banner} ===", f"Silnik:          {engine.upper()}",
+                             f"Katalog roboczy: {cwd}",
+                             "Terminal: powłoka; rozmowę wybierz ręcznie.",
+                             "==================================================="]
+                    quoted_lines = ' '.join(shlex.quote(line) for line in lines)
+                    sh_cmd = f"cd {shlex.quote(cwd)} && printf '%s\\n' {quoted_lines} && exec bash"
                     tab_cmd = [
                         'xterm',
                         '-T', f"{title_prefix} {tab.get('title')}",

@@ -1,0 +1,98 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-026",
+  "summary": "Open snapshot terminal previews as plain shells without inferred agent launches",
+  "workstream": "application",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "requested"
+  },
+  "allowedPaths": [
+    "project/ticket-026/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/preview.py",
+    "tests/test_preview_shells.py",
+    "tests/test_recovery.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "1ab97a8b1e582d981460edfd0301faa14bb7cfe5",
+    "targetBranch": "main",
+    "outcome": "Fix unverified agent continuation and shell interpolation in PLF004 snapshot terminal previews; verify via Willman and publish through protected OneDev/Validator",
+    "nonGoals": [
+      "No native conversation binding implementation, actual IDE or agent launches, remote transfer, deployment, dependencies or protected CI changes.",
+      "Preserve Willmux271 unresolved protected publication evidence and wider PLF002/004 scope."
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 30,
+    "budgets": {
+      "maxImplementationFiles": 3,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Snapshot process records identify provider/cwd but not a verified conversation. Generate plain Bash tabs and rebuild launch arguments from quoted display fields rather than trusting stored resume commands, scripts or terminal arguments. Native interactive preview quotes cwd/banner and executes only a plain shell. Exact-ID supervised recovery remains separate.",
+      "components": [
+        {
+          "name": "snapshot terminal preview",
+          "paths": [
+            "src/uncrash/preview.py",
+            "tests/test_recovery.py",
+            "tests/test_preview_shells.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Protected revert of implementation; no stored-data migration."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "python -m pytest tests/test_preview_shells.py -q"
+        ],
+        "evidence": "Generated and stale/direct launch plans do not invoke fake Codex/Agy/Claude or injected commands; paths and banner text survive shell metacharacters."
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "python -m pytest tests/test_recovery.py tests/test_novnc.py tests/test_api.py -q"
+        ],
+        "evidence": "Existing snapshot preview, native virtual desktop and REST/MCP consumers remain compatible."
+      },
+      {
+        "criterion": "AC-03",
+        "commands": [
+          "python -m pytest tests -q",
+          "./project/governance-check.sh"
+        ],
+        "evidence": "Full source suite and mandatory four-window X11 pass via Willman; governed scope and hosts pass."
+      },
+      {
+        "criterion": "AC-04",
+        "commands": [
+          "protected exact-head OneDev and independent Validator"
+        ],
+        "evidence": "Trusted review and protected merge bind frozen repository/PR/HEAD/ticket."
+      }
+    ]
+  }
+}
