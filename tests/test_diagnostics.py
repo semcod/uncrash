@@ -343,7 +343,7 @@ def test_salvage_failed_sql_import_preserves_source_and_does_not_publish(tmp_pat
     class FailedImport(sqlite3.Connection):
         def execute(self, sql, *args):
             if sql.startswith('INSERT INTO'):
-                raise sqlite3.OperationalError('injected import failure')
+                raise sqlite3.OperationalError('injected private-session-marker')
             return super().execute(sql, *args)
 
     def connect(path, **kwargs):
@@ -355,9 +355,54 @@ def test_salvage_failed_sql_import_preserves_source_and_does_not_publish(tmp_pat
     output = tmp_path / 'failed.db'
     result = recovery.salvage_agent_session_db(source, output)
     assert result['status'] == 'FAILED' and result['salvagedStepCount'] == 0
+    assert 'private-session-marker' not in json.dumps(result)
     assert not output.exists() and source.read_bytes() == original
     assert Path(result['quarantinedPath']).read_bytes() == original
     assert not list(tmp_path.glob('uncrash-session-staging-*'))
+
+
+@pytest.mark.parametrize('failure', ['insert', 'destination-open'])
+def test_failed_salvage_closes_connections_before_directory_cleanup(tmp_path, monkeypatch, failure):
+    import tempfile
+
+    source = _session_database(tmp_path / 'source.db')
+    original = source.read_bytes()
+    real_connect = sqlite3.connect
+    real_directory = tempfile.TemporaryDirectory
+    connections = []
+    cleanups = []
+
+    class FailedImport(sqlite3.Connection):
+        def execute(self, sql, *args):
+            if sql.startswith('INSERT INTO'):
+                raise sqlite3.OperationalError('injected import failure')
+            return super().execute(sql, *args)
+
+    def connect(path, **kwargs):
+        if isinstance(path, Path):
+            if failure == 'destination-open':
+                raise sqlite3.OperationalError('injected connection failure')
+            kwargs['factory'] = FailedImport
+        connection = real_connect(path, **kwargs)
+        connections.append(connection)
+        return connection
+
+    class CheckedDirectory(real_directory):
+        def cleanup(self):
+            for connection in connections:
+                with pytest.raises(sqlite3.ProgrammingError, match='closed'):
+                    connection.execute('SELECT 1')
+            cleanups.append(True)
+            super().cleanup()
+
+    monkeypatch.setattr(sqlite3, 'connect', connect)
+    monkeypatch.setattr(tempfile, 'TemporaryDirectory', CheckedDirectory)
+    output = tmp_path / 'output.db'
+    result = recovery.salvage_agent_session_db(source, output)
+    assert result['status'] == 'FAILED' and result['verifiedIntegrity'] == 'failed'
+    assert cleanups and len(connections) == (2 if failure == 'insert' else 1)
+    assert source.read_bytes() == Path(result['quarantinedPath']).read_bytes() == original
+    assert not output.exists() and not list(tmp_path.glob('uncrash-session-staging-*'))
 
 
 def test_salvage_corrupt_source_never_claims_empty_recovery_success(tmp_path):

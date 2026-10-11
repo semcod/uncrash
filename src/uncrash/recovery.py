@@ -665,33 +665,37 @@ def salvage_agent_session_db(source_path: Path, output_path: Path) -> dict:
         with tempfile.TemporaryDirectory(prefix='uncrash-session-staging-', dir=output_path.parent) as staging:
             temporary = Path(staging) / 'recovered.db'
             write_file(temporary, b'')
-            source_db = sqlite3.connect('file:' + quote(str(quarantine_path), safe='/') + '?mode=ro&immutable=1', uri=True)
-            recovered_db = sqlite3.connect(temporary, isolation_level=None)
-            for connection in (source_db, recovered_db):
-                connection.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
-            recovered_db.execute('PRAGMA max_page_count=16384')
-            dumped_bytes = 0
-            for statement in source_db.iterdump():
-                dumped_bytes += len(statement.encode('utf-8'))
-                if dumped_bytes > 64 * 1024**2 or time.monotonic() >= deadline:
-                    raise RecoveryError('Session recovery budget exceeded')
-                recovered_db.execute(statement)
-            if recovered_db.in_transaction or recovered_db.execute('PRAGMA quick_check(20)').fetchall() != [('ok',)]:
-                raise RecoveryError('Recovered SQLite integrity was not verified')
-            table_names = [row[0] for row in recovered_db.execute(
-                "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()]
-            if not table_names:
-                raise RecoveryError('No tables could be salvaged from the session database')
-            step_tables = [t for t in table_names if any(k in t.lower() for k in ('step', 'message', 'event', 'turn', 'history'))]
-            target_tables = step_tables if step_tables else table_names
-            salvaged_count = 0
-            for t in target_tables:
-                safe_t = t.replace('"', '""')
-                salvaged_count += recovered_db.execute(f'SELECT count(*) FROM "{safe_t}"').fetchone()[0]
-            receipt['salvagedStepCount'] = salvaged_count
-            receipt['verifiedIntegrity'] = 'ok'
-            source_db.close(); source_db = None
-            recovered_db.close(); recovered_db = None
+            try:
+                source_db = sqlite3.connect('file:' + quote(str(quarantine_path), safe='/') + '?mode=ro&immutable=1', uri=True)
+                recovered_db = sqlite3.connect(temporary, isolation_level=None)
+                for connection in (source_db, recovered_db):
+                    connection.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+                recovered_db.execute('PRAGMA max_page_count=16384')
+                dumped_bytes = 0
+                for statement in source_db.iterdump():
+                    dumped_bytes += len(statement.encode('utf-8'))
+                    if dumped_bytes > 64 * 1024**2 or time.monotonic() >= deadline:
+                        raise RecoveryError('Session recovery budget exceeded')
+                    recovered_db.execute(statement)
+                if recovered_db.in_transaction or recovered_db.execute('PRAGMA quick_check(20)').fetchall() != [('ok',)]:
+                    raise RecoveryError('Recovered SQLite integrity was not verified')
+                table_names = [row[0] for row in recovered_db.execute(
+                    "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()]
+                if not table_names:
+                    raise RecoveryError('No tables could be salvaged from the session database')
+                step_tables = [t for t in table_names if any(k in t.lower() for k in ('step', 'message', 'event', 'turn', 'history'))]
+                target_tables = step_tables if step_tables else table_names
+                salvaged_count = 0
+                for t in target_tables:
+                    safe_t = t.replace('"', '""')
+                    salvaged_count += recovered_db.execute(f'SELECT count(*) FROM "{safe_t}"').fetchone()[0]
+                receipt['salvagedStepCount'] = salvaged_count
+                receipt['verifiedIntegrity'] = 'ok'
+            finally:
+                if source_db is not None:
+                    source_db.close(); source_db = None
+                if recovered_db is not None:
+                    recovered_db.close(); recovered_db = None
             digest, size = _digest(temporary)
             if size > 64 * 1024**2:
                 raise RecoveryError('Recovered database exceeds the byte budget')
@@ -702,8 +706,8 @@ def salvage_agent_session_db(source_path: Path, output_path: Path) -> dict:
             os.link(temporary, output_path, follow_symlinks=False)
             sync_dir(output_path.parent)
             receipt.update(status='COMPLETED', recoveredSha256=digest)
-    except (OSError, sqlite3.Error, RecoveryError, UnicodeError) as exc:
-        receipt['diagnosticFinding'] = f'SQLite recovery or verified publication failed: {exc}'
+    except (OSError, sqlite3.Error, RecoveryError, UnicodeError):
+        receipt['diagnosticFinding'] = 'SQLite recovery or verified publication failed; original input retained'
         receipt['salvagedStepCount'] = 0
         receipt['verifiedIntegrity'] = 'failed'
     finally:
