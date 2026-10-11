@@ -808,3 +808,107 @@ def test_native_history_preserves_provider_order_and_intermediate_ancestors(tmp_
         expected = d.snapshot_health(tmp_path, now=now)
     assert [r['pid'] for r in expected['historical_ide_provider_observations']] == [301, 200, 250]
     assert d.native_snapshot_health(tmp_path, now=now) == expected
+
+
+def test_sqlite_integrity_batch_empty_and_single(tmp_path):
+    assert d.check_sqlite_integrity_batch([]) == []
+    source = _session_database(tmp_path / 'single.db')
+    result = d.check_sqlite_integrity_batch([source])
+    assert len(result) == 1
+    assert result[0][0] == source and result[0][1] == 'ok' and result[0][2] is None
+
+
+def test_sqlite_integrity_batch_parity_and_ordering(tmp_path):
+    dbs = []
+    # 1. healthy dbs
+    for i in range(3):
+        p = _session_database(tmp_path / f'healthy_{i}.db')
+        dbs.append(p)
+    # 2. missing db
+    dbs.append(tmp_path / 'missing.db')
+    # 3. corrupted db
+    corrupt = tmp_path / 'corrupt.db'
+    corrupt.write_bytes(b'SQLite format 3\0' + b'\xff' * 100)
+    dbs.append(corrupt)
+    # 4. symlink db
+    alias = tmp_path / 'alias.db'
+    alias.symlink_to(dbs[0])
+    dbs.append(alias)
+
+    expected = [(p, *d.check_sqlite_integrity(p)) for p in dbs]
+    batch_result = d.check_sqlite_integrity_batch(dbs, max_workers=4)
+
+    assert len(batch_result) == len(expected)
+    for (p1, s1, e1), (p2, s2, e2) in zip(batch_result, expected):
+        assert p1 == p2
+        assert s1 == s2
+        if s1 == 'ok':
+            assert e1 is None and e2 is None
+        else:
+            assert e1 is not None and e2 is not None
+
+
+def test_provider_inventory_native_parity_and_fallback(tmp_path, monkeypatch, owned_diagnostics_worker):
+    home = tmp_path / 'home'
+    home.mkdir()
+
+    # Codex sessions
+    codex_dir = home / '.codex/sessions'
+    codex_dir.mkdir(parents=True)
+    # Valid records
+    (codex_dir / 's1.jsonl').write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 's1', 'source': 'vscode'}}) + '\nBODY')
+    (codex_dir / 's2.jsonl').write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 's2', 'source': 'terminal'}}) + '\n')
+    (codex_dir / 's3_dup.jsonl').write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 's1', 'source': 'vscode'}}) + '\n')
+    # Invalid records: missing type, invalid id, non-json, oversized
+    (codex_dir / 'inv1.jsonl').write_text(json.dumps({'type': 'other', 'payload': {'id': 'x'}}) + '\n')
+    (codex_dir / 'inv2.jsonl').write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 123}}) + '\n')
+    (codex_dir / 'inv3.jsonl').write_text('NOT JSON\n')
+    (codex_dir / 'inv4.jsonl').write_bytes(b'{"type":"session_meta"}' + b'x' * (1024 * 1024 + 2) + b'\n')
+
+    # Claude projects (nested)
+    claude_nested = home / '.claude/projects/proj1'
+    claude_nested.mkdir(parents=True)
+    (claude_nested / 'chat1.jsonl').write_text('{}\n')
+    (claude_nested / 'chat2.jsonl').write_text('{}\n')
+
+    # Agy conversations
+    agy_root = home / '.gemini/antigravity-cli'
+    (agy_root / 'conversations').mkdir(parents=True)
+    _session_database(agy_root / 'conversations/conv1.db')
+    _session_database(agy_root / 'conversations/conv2.db')
+    with sqlite3.connect(agy_root / 'conversation_summaries.db') as c:
+        c.execute('CREATE TABLE conversation_summaries(conversation_id TEXT)')
+        c.executemany('INSERT INTO conversation_summaries VALUES(?)', [('conv1',), ('orphan_summary',)])
+
+    # 1. Native execution
+    monkeypatch.setattr(d, 'find_native_worker', lambda *a, **k: owned_diagnostics_worker)
+    native_res = d.provider_inventory(home, check_integrity=True)
+
+    # 2. Pure Python fallback
+    with monkeypatch.context() as pure:
+        pure.setattr(d, 'native_provider_inventory', lambda *a, **k: None)
+        py_res = d.provider_inventory(home, check_integrity=True)
+
+    assert native_res == py_res
+    assert native_res['codex']['files'] == 7
+    assert native_res['codex']['metadata_records'] == 3
+    assert native_res['codex']['unique_ids'] == 2
+    assert native_res['codex']['invalid_metadata'] == 4
+    assert native_res['codex']['source_labels'] == {'vscode': 2, 'terminal': 1}
+    assert native_res['claude']['jsonl_files'] == 2
+    assert native_res['agy']['summary_rows'] == 2
+    assert native_res['agy']['summary_with_file'] == 1
+    assert native_res['agy']['summary_without_file'] == 1
+    assert native_res['agy']['file_without_summary'] == 1
+    assert native_res['agy']['database_integrity'] == 'ok'
+
+
+def test_native_provider_inventory_refuses_symlink_home(tmp_path, monkeypatch, owned_diagnostics_worker):
+    real_home = tmp_path / 'real_home'
+    real_home.mkdir()
+    symlink_home = tmp_path / 'symlink_home'
+    symlink_home.symlink_to(real_home)
+
+    monkeypatch.setattr(d, 'find_native_worker', lambda *a, **k: owned_diagnostics_worker)
+    assert d.native_provider_inventory(symlink_home) is None
+

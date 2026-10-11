@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -159,6 +160,26 @@ def check_sqlite_integrity(path: Path) -> tuple[str, str | None]:
             connection.close()
 
 
+def check_sqlite_integrity_batch(paths: list[Path], max_workers: int = 8) -> list[tuple[Path, str, str | None]]:
+    """Check integrity of multiple SQLite databases concurrently while preserving input order."""
+    if not paths:
+        return []
+    if len(paths) == 1 or max_workers <= 1:
+        return [(p, *check_sqlite_integrity(p)) for p in paths]
+
+    workers = min(max_workers, len(paths))
+
+    def _worker(p: Path) -> tuple[Path, str, str | None]:
+        try:
+            status, err = check_sqlite_integrity(p)
+            return p, status, err
+        except Exception as exc:
+            return p, 'unavailable', str(exc)
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        return list(executor.map(_worker, paths))
+
+
 def native_scan_agent_log_panics(log_dir: Path, max_files: int = 20, state_root: Path = None) -> list[dict] | None:
     """Attempt fast native Rust scan of agent logs; returns None if native worker is unavailable."""
     if not isinstance(max_files, int) or not 1 <= max_files <= 100:
@@ -258,9 +279,10 @@ def check_agent_storage_health(home: Path) -> dict:
         checked_count = 0
         conv_dir = agy_root / 'conversations'
         if conv_dir.is_dir():
-            for db_path in sorted(conv_dir.glob('*.db')):
-                checked_count += 1
-                status, err = check_sqlite_integrity(db_path)
+            db_paths = sorted(conv_dir.glob('*.db'))
+            checked_count = len(db_paths)
+            results = check_sqlite_integrity_batch(db_paths)
+            for db_path, status, err in results:
                 if status != 'ok':
                     (corrupt_dbs if status == 'corrupted' else unavailable_dbs).append({
                         'provider': 'agy',
@@ -305,24 +327,90 @@ def check_agent_storage_health(home: Path) -> dict:
     return report
 
 
-def provider_inventory(home, check_integrity=False):
-    home = Path(home); result = {}; ids = []; labels = Counter(); invalid = 0
-    files = list((home / '.codex/sessions').rglob('*.jsonl'))
-    for path in files:
+def native_provider_inventory(home: Path, state_root: Path = None) -> dict | None:
+    """Attempt fast native Rust scan of provider sessions; returns None if native worker is unavailable."""
+    try:
+        home = no_links(home)
+    except (OSError, RecoveryError):
+        return None
+    binary = find_native_worker(state_root)
+    if binary is None:
+        return None
+    try:
+        proc = subprocess.run(
+            [str(binary), '--provider-inventory', str(home)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if proc.returncode == 0:
+            data = json.loads(proc.stdout.strip() or '{}')
+            if isinstance(data, dict) and 'codex' in data and 'claude' in data and 'agy_db_stems' in data:
+                return data
+    except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def provider_inventory(home, check_integrity=False, state_root=None):
+    home = Path(home)
+    result = {}
+    native_data = native_provider_inventory(home, state_root=state_root)
+    if native_data is not None:
+        result['codex'] = native_data['codex']
+        result['claude'] = native_data['claude']
+        db_files = set(native_data['agy_db_stems'])
+    else:
+        ids = []
+        labels = Counter()
+        invalid = 0
+        files = list((home / '.codex/sessions').rglob('*.jsonl'))
+        for path in files:
+            try:
+                with no_links(path).open('rb') as stream:
+                    raw = stream.readline(1024**2 + 1)
+                if len(raw) > 1024**2:
+                    raise ValueError('oversized metadata')
+                record = json.loads(raw)
+                if record.get('type') != 'session_meta':
+                    raise ValueError('missing metadata')
+                meta = record['payload']
+                sid = meta['id']
+                if not isinstance(sid, str):
+                    raise ValueError('invalid identity')
+                ids.append(sid)
+                label = meta.get('source')
+                labels[label if isinstance(label, str) else 'structured-source'] += 1
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                invalid += 1
+        result['codex'] = {
+            'files': len(files),
+            'metadata_records': len(ids),
+            'unique_ids': len(set(ids)),
+            'invalid_metadata': invalid,
+            'source_labels': dict(labels),
+            'host_binding': 'not-present'
+        }
         try:
-            with no_links(path).open('rb') as stream: raw = stream.readline(1024**2 + 1)
-            if len(raw) > 1024**2: raise ValueError('oversized metadata')
-            record = json.loads(raw)
-            if record.get('type') != 'session_meta': raise ValueError('missing metadata')
-            meta = record['payload']; sid = meta['id']
-            if not isinstance(sid, str): raise ValueError('invalid identity')
-            ids.append(sid); label = meta.get('source')
-            labels[label if isinstance(label, str) else 'structured-source'] += 1
-        except (OSError, ValueError, KeyError, TypeError, AttributeError): invalid += 1
-    result['codex'] = {'files': len(files), 'metadata_records': len(ids), 'unique_ids': len(set(ids)),
-                       'invalid_metadata': invalid, 'source_labels': dict(labels), 'host_binding': 'not-present'}
-    root = no_links(home / '.gemini/antigravity-cli'); db_files = {p.stem for p in (root / 'conversations').glob('*.db')}
-    summary = root / 'conversation_summaries.db'; connection = None
+            root = no_links(home / '.gemini/antigravity-cli')
+            conv_dir = root / 'conversations'
+            db_files = {p.stem for p in conv_dir.glob('*.db')} if conv_dir.is_dir() else set()
+        except (OSError, RecoveryError):
+            db_files = set()
+        result['claude'] = {
+            'jsonl_files': sum(1 for _ in (home / '.claude/projects').rglob('*.jsonl')),
+            'conversation_ids': 'not-enumerated',
+            'host_binding': 'not-verified'
+        }
+
+    try:
+        root = no_links(home / '.gemini/antigravity-cli')
+        summary = root / 'conversation_summaries.db'
+    except (OSError, RecoveryError):
+        result['agy'] = {'db_files': len(db_files), 'summary_status': 'unavailable', 'database_integrity': 'unavailable'}
+        return result
+
+    connection = None
     corrupted_dbs = []
     unavailable_dbs = []
     try:
@@ -330,24 +418,34 @@ def provider_inventory(home, check_integrity=False):
         rows = [r[0] for r in connection.execute('SELECT conversation_id FROM conversation_summaries')]
         valid = {r for r in rows if isinstance(r, str)}
         if check_integrity:
-            for db_file in (root / 'conversations').glob('*.db'):
-                st, err = check_sqlite_integrity(db_file)
-                if st != 'ok':
-                    (corrupted_dbs if st == 'corrupted' else unavailable_dbs).append({'id': db_file.stem, 'error': err})
+            conv_dir = root / 'conversations'
+            if conv_dir.is_dir():
+                db_paths = sorted(conv_dir.glob('*.db'))
+                results = check_sqlite_integrity_batch(db_paths)
+                for db_file, st, err in results:
+                    if st != 'ok':
+                        (corrupted_dbs if st == 'corrupted' else unavailable_dbs).append({'id': db_file.stem, 'error': err})
             integrity_status = 'corrupted' if corrupted_dbs else 'unavailable' if unavailable_dbs else 'ok'
         else:
             integrity_status = 'not-checked'
-        result['agy'] = {'summary_rows': len(rows), 'unique_summary_ids': len(valid), 'db_files': len(db_files),
-            'summary_with_file': len(valid & db_files), 'summary_without_file': len(valid - db_files),
-            'file_without_summary': len(db_files - valid), 'host_binding': 'not-present',
-            'database_integrity': integrity_status, 'corrupted_sessions': corrupted_dbs,
-            'unavailable_sessions': unavailable_dbs, 'resume_verified': False}
+        result['agy'] = {
+            'summary_rows': len(rows),
+            'unique_summary_ids': len(valid),
+            'db_files': len(db_files),
+            'summary_with_file': len(valid & db_files),
+            'summary_without_file': len(valid - db_files),
+            'file_without_summary': len(db_files - valid),
+            'host_binding': 'not-present',
+            'database_integrity': integrity_status,
+            'corrupted_sessions': corrupted_dbs,
+            'unavailable_sessions': unavailable_dbs,
+            'resume_verified': False
+        }
     except (OSError, sqlite3.Error, RecoveryError):
         result['agy'] = {'db_files': len(db_files), 'summary_status': 'unavailable', 'database_integrity': 'unavailable'}
     finally:
-        if connection is not None: connection.close()
-    result['claude'] = {'jsonl_files': sum(1 for _ in (home / '.claude/projects').rglob('*.jsonl')),
-                        'conversation_ids': 'not-enumerated', 'host_binding': 'not-verified'}
+        if connection is not None:
+            connection.close()
     return result
 
 
@@ -438,7 +536,7 @@ def snapshot_health(state, interval=300, now=None):
 
 def diagnose(home=None, state=None, interval=300):
     home = Path(home or Path.home()); state = Path(state or home / '.local/state/uncrash')
-    current = session_hosts(); inventory = provider_inventory(home); backups = snapshot_health(state, interval)
+    current = session_hosts(); inventory = provider_inventory(home, state_root=state); backups = snapshot_health(state, interval)
     agent_health = check_agent_storage_health(home)
     findings = []
     if backups['stale']: findings.append('UNCRASH-BACKUP-STALE')

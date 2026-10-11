@@ -905,6 +905,15 @@ impl<'a> JsonParser<'a> {
     fn parse_manifest_preview(&mut self) -> Option<JsonValue> {
         self.manifest(true)
     }
+    fn parse_json(&mut self) -> Option<JsonValue> {
+        self.skip_whitespace();
+        let value = self.parse()?;
+        self.skip_whitespace();
+        if self.pos != self.bytes.len() {
+            return None;
+        }
+        Some(value)
+    }
     fn skip_value(&mut self) -> bool {
         // Strict streaming validation without materializing large discarded arrays.
         if self.depth >= 128 {
@@ -2158,6 +2167,251 @@ fn run_list_snapshots(args: &[String]) -> io::Result<()> {
     }
 }
 
+fn collect_regular_files(dir: &Path, ext: &str, depth: usize, out: &mut Vec<PathBuf>) {
+    if depth == 0 {
+        return;
+    }
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        let smeta = match fs::symlink_metadata(&p) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if smeta.file_type().is_symlink() {
+            continue;
+        }
+        if smeta.is_dir() {
+            collect_regular_files(&p, ext, depth - 1, out);
+        } else if smeta.is_file() && p.extension().and_then(|s| s.to_str()) == Some(ext) {
+            out.push(p);
+        }
+    }
+}
+
+fn read_first_line(path: &Path, max_len: usize) -> io::Result<Option<Vec<u8>>> {
+    let mut file = open(path, NONBLOCK)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(fail());
+    }
+    let mut chunk = [0u8; 8192];
+    let mut buf = Vec::new();
+    loop {
+        let to_read = chunk.len().min(max_len + 1 - buf.len());
+        if to_read == 0 {
+            return Ok(None);
+        }
+        let n = match file.read(&mut chunk[..to_read]) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if let Some(pos) = chunk[..n].iter().position(|&b| b == b'\n') {
+            buf.extend_from_slice(&chunk[..pos]);
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.len() > max_len {
+            return Ok(None);
+        }
+    }
+    Ok(Some(buf))
+}
+
+fn run_provider_inventory(args: &[String]) -> io::Result<()> {
+    if args.is_empty() {
+        return Err(fail());
+    }
+    let home = Path::new(&args[0]);
+    let _home_guard = match open(home, DIRECTORY) {
+        Ok(g) => g,
+        Err(_) => return Err(fail()),
+    };
+    let meta = match fs::symlink_metadata(home) {
+        Ok(m) => m,
+        Err(_) => return Err(fail()),
+    };
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err(fail());
+    }
+
+    let home_arc = Arc::new(home.to_path_buf());
+
+    // 1. Claude scan in background thread
+    let home_claude = home_arc.clone();
+    let claude_handle = thread::spawn(move || {
+        let claude_root = home_claude.join(".claude/projects");
+        let mut claude_files = Vec::new();
+        if let Ok(_guard) = open(&claude_root, DIRECTORY) {
+            if let Ok(meta) = fs::symlink_metadata(&claude_root) {
+                if !meta.file_type().is_symlink() && meta.is_dir() {
+                    collect_regular_files(&claude_root, "jsonl", 16, &mut claude_files);
+                }
+            }
+        }
+        claude_files.len()
+    });
+
+    // 2. Antigravity DB files in background thread
+    let home_agy = home_arc.clone();
+    let agy_handle = thread::spawn(move || {
+        let agy_conv = home_agy.join(".gemini/antigravity-cli/conversations");
+        let mut agy_db_stems = Vec::new();
+        if let Ok(_guard) = open(&agy_conv, DIRECTORY) {
+            if let Ok(meta) = fs::symlink_metadata(&agy_conv) {
+                if !meta.file_type().is_symlink() && meta.is_dir() {
+                    if let Ok(entries) = fs::read_dir(&agy_conv) {
+                        for entry in entries.flatten() {
+                            let p = entry.path();
+                            if let Ok(smeta) = fs::symlink_metadata(&p) {
+                                if !smeta.file_type().is_symlink() && smeta.is_file() {
+                                    if p.extension().and_then(|s| s.to_str()) == Some("db") {
+                                        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                                            agy_db_stems.push(stem.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        agy_db_stems
+    });
+
+    // 3. Codex sessions scan
+    let codex_root = home_arc.join(".codex/sessions");
+    let mut codex_files: Vec<PathBuf> = Vec::new();
+    if let Ok(_guard) = open(&codex_root, DIRECTORY) {
+        if let Ok(meta) = fs::symlink_metadata(&codex_root) {
+            if !meta.file_type().is_symlink() && meta.is_dir() {
+                collect_regular_files(&codex_root, "jsonl", 16, &mut codex_files);
+            }
+        }
+    }
+
+    let num_threads = 4.min(codex_files.len().max(1));
+    let chunk_size = codex_files.len().div_ceil(num_threads).max(1);
+    let mut worker_handles = Vec::new();
+
+    for chunk in codex_files.chunks(chunk_size) {
+        let chunk_vec = chunk.to_vec();
+        worker_handles.push(thread::spawn(move || {
+            let mut records = 0usize;
+            let mut ids = HashSet::new();
+            let mut invalid = 0usize;
+            let mut labels = HashMap::new();
+            for path in chunk_vec {
+                let line_opt = match read_first_line(&path, 1024 * 1024) {
+                    Ok(opt) => opt,
+                    Err(_) => {
+                        invalid += 1;
+                        continue;
+                    }
+                };
+                let line_bytes = match line_opt {
+                    Some(b) => b,
+                    None => {
+                        invalid += 1;
+                        continue;
+                    }
+                };
+                let line_str = match std::str::from_utf8(&line_bytes) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        invalid += 1;
+                        continue;
+                    }
+                };
+                let mut parser = JsonParser::new(line_str);
+                let val = match parser.parse_json() {
+                    Some(v) => v,
+                    None => {
+                        invalid += 1;
+                        continue;
+                    }
+                };
+                if val.get("type").and_then(|v| v.as_str()) != Some("session_meta") {
+                    invalid += 1;
+                    continue;
+                }
+                let payload = match val.get("payload") {
+                    Some(p) => p,
+                    None => {
+                        invalid += 1;
+                        continue;
+                    }
+                };
+                let sid = match payload.get("id").and_then(|v| v.as_str()) {
+                    Some(s) => s,
+                    None => {
+                        invalid += 1;
+                        continue;
+                    }
+                };
+                records += 1;
+                ids.insert(sid.to_string());
+                let label = match payload.get("source").and_then(|v| v.as_str()) {
+                    Some(s) => s.to_string(),
+                    None => "structured-source".to_string(),
+                };
+                *labels.entry(label).or_insert(0usize) += 1;
+            }
+            (records, ids, invalid, labels)
+        }));
+    }
+
+    let mut metadata_records = 0usize;
+    let mut unique_ids: HashSet<String> = HashSet::new();
+    let mut invalid_metadata = 0usize;
+    let mut source_labels: HashMap<String, usize> = HashMap::new();
+
+    for h in worker_handles {
+        if let Ok((recs, ids, inv, lbls)) = h.join() {
+            metadata_records += recs;
+            unique_ids.extend(ids);
+            invalid_metadata += inv;
+            for (k, v) in lbls {
+                *source_labels.entry(k).or_insert(0usize) += v;
+            }
+        }
+    }
+
+    let claude_files_count = claude_handle.join().map_err(|_| fail())?;
+    let mut agy_db_stems = agy_handle.join().map_err(|_| fail())?;
+
+    let mut labels_vec: Vec<(&String, &usize)> = source_labels.iter().collect();
+    labels_vec.sort_by_key(|(k, _)| *k);
+    let labels_json: Vec<String> = labels_vec
+        .into_iter()
+        .map(|(k, v)| format!("\"{}\":{}", json_escape(k), v))
+        .collect();
+
+    agy_db_stems.sort();
+    let agy_stems_json: Vec<String> = agy_db_stems
+        .iter()
+        .map(|s| format!("\"{}\"", json_escape(s)))
+        .collect();
+
+    println!(
+        "{{\"codex\":{{\"files\":{},\"metadata_records\":{},\"unique_ids\":{},\"invalid_metadata\":{},\"source_labels\":{{{}}},\"host_binding\":\"not-present\"}},\"claude\":{{\"jsonl_files\":{},\"conversation_ids\":\"not-enumerated\",\"host_binding\":\"not-verified\"}},\"agy_db_stems\":[{}]}}",
+        codex_files.len(),
+        metadata_records,
+        unique_ids.len(),
+        invalid_metadata,
+        labels_json.join(","),
+        claude_files_count,
+        agy_stems_json.join(",")
+    );
+    Ok(())
+}
+
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && args[1] == "--scan-panics" {
@@ -2168,6 +2422,9 @@ fn main() -> io::Result<()> {
     }
     if args.len() > 1 && args[1] == "--list-snapshots" {
         return run_list_snapshots(&args[2..]);
+    }
+    if args.len() > 1 && args[1] == "--provider-inventory" {
+        return run_provider_inventory(&args[2..]);
     }
     let mut input = String::new();
     io::stdin()
