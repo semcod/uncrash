@@ -2,8 +2,12 @@
 import copy
 from html.parser import HTMLParser
 import json
+from pathlib import Path
 import shutil
 import subprocess
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import pytest
 
@@ -351,4 +355,60 @@ process.stdout.write(JSON.stringify({previewHtml}));
         assert "/home/tom/github/semcod/uncrash" in html
     finally:
         os.unlink(temp_js)
+
+
+WORKSPACE_PREVIEW_HARNESS = r"""
+const vm = require('node:vm');
+const fs = require('node:fs');
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+const nodes = new Map();
+function element() {
+  const classes = new Set();
+  return {innerHTML:'',textContent:'',style:{},children:[],addEventListener(){},
+    appendChild(child){this.children.push(child)},
+    classList:{add(x){classes.add(x)},remove(x){classes.delete(x)},contains(x){return classes.has(x)},
+      toggle(x){if(classes.has(x)){classes.delete(x);return false}classes.add(x);return true}}};
+}
+const getElementById = id => {if(!nodes.has(id))nodes.set(id,element());return nodes.get(id)};
+const callbacks = [];
+const context = vm.createContext({
+  document:{getElementById,createElement:element,readyState:'loading',addEventListener(){},
+    querySelector(){return getElementById('container')}},
+  window:{addEventListener(kind,callback){callbacks.push([kind,callback])},
+    location:new URL('http://localhost/'),history:{replaceState(){}}},
+  URL,URLSearchParams,console,setTimeout(){},setInterval(){},
+  navigator:{clipboard:{writeText(){}}}
+});
+vm.runInContext(input.script,context);
+context.workspace = input.workspace;
+vm.runInContext('renderWorkspacePreview(workspace)',context);
+process.stdout.write(JSON.stringify({html:getElementById('previewArea').innerHTML,
+  fullscreenBefore:getElementById('container').classList.contains('fullscreen')}));
+"""
+
+
+@pytest.mark.parametrize('field', ['name', 'title', 'provider'])
+@pytest.mark.parametrize('text', [
+    'Ordinary terminal', '<img src=x onerror="window.reviewProbe=1">',
+    'Terminal <one> & "two"', 'Zażółć 🧪',
+    '</strong><svg onload="window.reviewProbe=1"></svg><strong>',
+])
+def test_workspace_preview_preserves_tab_title_as_text(field, text):
+    node = shutil.which('node')
+    assert node, 'Workspace preview regression requires Node'
+    workspace = dict(workspace_id='owned-review', engine='native', display=':1',
+                     ws_port=6080, rfb_port=5900,
+                     novnc_url='http://127.0.0.1:6080/vnc.html',
+                     terminal_tabs=[{field: text}])
+    script = DASHBOARD_HTML.split('<script>', 1)[1].split('</script>', 1)[0]
+    run = subprocess.run([node, '-e', WORKSPACE_PREVIEW_HARNESS],
+        input=json.dumps({'script': script, 'workspace': workspace}),
+        capture_output=True, text=True, timeout=10, check=True)
+    parsed = ParsedHTML(json.loads(run.stdout)['html'])
+    expected = text.upper() if field == 'provider' else text
+    assert expected in ''.join(parsed.text)
+    assert all(tag not in {'img', 'svg'} for tag, _ in parsed.tags)
+    # Controls render only the fixed toolbar handlers, never tab-supplied ones.
+    assert all('onerror' not in attrs and 'onload' not in attrs for _, attrs in parsed.tags)
+
 
