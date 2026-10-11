@@ -1203,7 +1203,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const tabChips = (ws.terminal_tabs || []).map((t, idx) => {
         const p = (t.provider || 'shell').toUpperCase();
         const tabTitle = t.name || t.title || p;
-        return `<span class="tag" style="background:#313244; color:var(--text-main); font-size:0.75rem">${idx}: <strong>${tabTitle}</strong></span>`;
+        return `<span class="tag" style="background:#313244; color:var(--text-main); font-size:0.75rem">${idx}: <strong>${escapeHtml(tabTitle)}</strong></span>`;
       }).join(' ');
       const tabsBarHtml = tabChips ? `<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap"><span style="font-size:0.75rem; color:var(--text-muted)">Zregenerowane taby:</span> ${tabChips}</div>` : '';
 
@@ -1268,9 +1268,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span class="status-pulse"></span>
             <span>Nawiązywanie połączenia ze zdalnym pulpitem <strong>${escapeHtml(ws.workspace_id)}</strong>...</span>
           </div>
-          <iframe id="novncIframe" src="${ws.novnc_url}" class="novnc-frame" style="height:680px" onload="document.getElementById('novncLoader')?.remove()"></iframe>
+          <iframe id="novncIframe" src="${ws.novnc_url}" class="novnc-frame" style="height:680px"></iframe>
         </div>
       `;
+      const iframe = document.getElementById('novncIframe');
+      if (iframe) {
+        iframe.addEventListener('load', () => {
+          const loader = document.getElementById('novncLoader');
+          if (loader) loader.remove();
+        });
+      }
     }
 
     function copyWorkspaceUrl(url) {
