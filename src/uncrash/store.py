@@ -18,6 +18,7 @@ import pwd
 import time
 from urllib.parse import quote
 import uuid
+import tempfile
 import zlib
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -167,9 +168,31 @@ def build_native(root):
     return binary
 
 
+def find_native_worker(root=None):
+    source = Path(__file__).with_name('snapshot.rs')
+    if not source.is_file():
+        return None
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    candidates = []
+    if root is not None:
+        candidates.append(Path(root) / 'native' / digest / 'uncrash-snapshot')
+    candidates.append(Path.home() / '.local/share/uncrash/native' / digest / 'uncrash-snapshot')
+    candidates.append(Path(tempfile.gettempdir()) / f'uncrash-{os.getuid()}' / 'native' / digest / 'uncrash-snapshot')
+    for binary in candidates:
+        try:
+            if binary.exists():
+                info = binary.stat()
+                if binary.is_file() and info.st_uid == os.getuid() and not (info.st_mode & 0o077):
+                    no_links(binary)
+                    return binary
+        except (OSError, RecoveryError):
+            continue
+    return None
+
+
 def rust_capture(root, jobs, config, key):
     if not jobs: return []
-    binary = no_links(config['rust_binary']) if config.get('rust_binary') else build_native(root)
+    binary = no_links(config['rust_binary']) if config.get('rust_binary') else (find_native_worker(root) or build_native(root))
     workers = int(config.get('rust_threads', 4))
     if not 1 <= workers <= 16: raise RecoveryError('Rust threads must be between 1 and 16')
     header = str(workers)+'\t'+(key.hex() if key else '-')+'\t'+str(int(config.get('compress', False)))

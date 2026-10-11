@@ -1,0 +1,32 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-018",
+  "summary": "Native Rust acceleration for agent log panic scanning and session diagnostics",
+  "workstream": "application",
+  "classification": {
+    "kind": "FEATURE",
+    "priority": "P2",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-018/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/snapshot.rs",
+    "src/uncrash/diagnostics.py",
+    "src/uncrash/store.py",
+    "src/uncrash/cli.py",
+    "tests/test_diagnostics.py",
+    "tests/test_native.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [
+    "python",
+    "rust"
+  ],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null
+}
