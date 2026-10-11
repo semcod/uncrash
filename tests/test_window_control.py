@@ -262,15 +262,13 @@ def test_mcp_rejects_coerced_process_close_flags(monkeypatch, tmp_path, field, v
 
 
 def test_real_x11_four_windows_one_process_close_one(monkeypatch, tmp_path):
-    try:
-        import Xlib
-        from Xlib import X, Xatom, display
-    except ImportError:
-        return
+    """Require and exercise actual WM_DELETE_WINDOW on an owned desktop."""
+    from Xlib import X, Xatom, display
     import shlex
     import sys
-    if not shutil.which('Xvfb') or not shutil.which('openbox'):
-        return
+    assert shutil.which('Xvfb') and shutil.which('openbox'), (
+        'Owned X11 fixture requires Xvfb and Openbox'
+    )
     read_fd, write_fd = os.pipe()
     xvfb = subprocess.Popen(['Xvfb', '-displayfd', str(write_fd), '-screen', '0', '1024x768x24', '-nolisten', 'tcp'],
                             pass_fds=(write_fd,), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -345,3 +343,30 @@ def test_real_x11_four_windows_one_process_close_one(monkeypatch, tmp_path):
             if process is not None:
                 process.terminate()
                 process.wait(timeout=5)
+
+
+@pytest.mark.parametrize('missing', ['Xvfb', 'openbox'])
+def test_real_x11_fixture_fails_when_a_required_executable_is_missing(monkeypatch, tmp_path, missing):
+    monkeypatch.setattr(shutil, 'which', lambda name: None if name == missing else '/owned/' + name)
+    calls = []
+    monkeypatch.setattr(subprocess, 'Popen', lambda *args, **kwargs: calls.append(args))
+    with pytest.raises(AssertionError, match='requires Xvfb and Openbox'):
+        test_real_x11_four_windows_one_process_close_one(monkeypatch, tmp_path)
+    assert calls == []
+
+
+def test_real_x11_fixture_fails_when_xlib_is_missing(monkeypatch, tmp_path):
+    import builtins
+    original_import = builtins.__import__
+
+    def unavailable_xlib(name, *args, **kwargs):
+        if name == 'Xlib':
+            raise ModuleNotFoundError('Required Xlib is unavailable')
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', unavailable_xlib)
+    calls = []
+    monkeypatch.setattr(subprocess, 'Popen', lambda *args, **kwargs: calls.append(args))
+    with pytest.raises(ModuleNotFoundError, match='Required Xlib'):
+        test_real_x11_four_windows_one_process_close_one(monkeypatch, tmp_path)
+    assert calls == []
