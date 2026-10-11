@@ -14,7 +14,9 @@ from .contracts import parse_restore_action, process_export
 from .native import discover, selected_config, save_config
 from .runtime import Launcher, recover_at_startup, run_daemon
 from .store import RecoveryError, Store, build_native, no_links, private_dir, profiles, write_file
-from .recovery import (export_bundle, import_bundle, transfer_bundle, jetbrains_state, request_window_close,
+from .window_control import close_one_window, require_process_consent, window_inventory
+from .health import inspect_health
+from .recovery import (export_bundle, import_bundle, transfer_bundle, jetbrains_state,
                        detected_gui_apps, close_gui_app, find_pycharm_executable, jetbrains_projects, restore_pycharm)
 
 
@@ -84,6 +86,14 @@ def main(argv=None):
     parser.add_argument('--encrypt', action=argparse.BooleanOptionalAction, default=None)
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('inventory')
+    doctor = sub.add_parser('doctor', help='Read-only freeze risk inspection before adding application load')
+    doctor.add_argument('--log-dir', type=Path)
+    doctor.add_argument('--thread-dump', type=Path, help='Existing Java thread dump; does not attach to the JVM')
+    doctor.add_argument('--project', type=Path)
+    doctor.add_argument('--pid', type=int)
+    doctor.add_argument('--start-ticks')
+    doctor.add_argument('--max-age-seconds', type=int, default=600)
+    doctor.add_argument('--preflight', action='store_true', help='Exit 0 for no risk observed, 1 warning, 2 critical, 3 unknown')
     diagnostic = sub.add_parser('diagnose', help='Read-only session origins and backup health')
     diagnostic.add_argument('--output', type=Path, help='New private report directory')
     native = sub.add_parser('profiles', help='Discover or explicitly select native durable data')
@@ -115,25 +125,36 @@ def main(argv=None):
     apps_parser.add_argument('--close', nargs='?', const='__default__', help='Close an explicit whole-process PID; requires --start-ticks')
     apps_parser.add_argument('--start-ticks')
     apps_parser.add_argument('--force', action='store_true', help='Force kill if process does not exit promptly')
+    apps_parser.add_argument('--entire-process', action='store_true', help='Explicitly allow closing ALL windows of the selected PID')
     apps_parser.add_argument('--json', action='store_true', help='Output in JSON format')
     close_app_parser = sub.add_parser('close-app', help='Close one explicit application process with PID/start identity')
     close_app_parser.add_argument('target', nargs='?', default=None, help='Explicit PID from apps --json; this closes the whole process')
     close_app_parser.add_argument('--start-ticks')
     close_app_parser.add_argument('--force', action='store_true', help='Force kill if process does not exit promptly')
+    close_app_parser.add_argument('--entire-process', action='store_true', help='Explicitly allow closing ALL windows of the selected PID')
     pycharm_parser = sub.add_parser('pycharm', help='Inspect, close, or restore JetBrains PyCharm projects')
     pycharm_parser.add_argument('action', nargs='?', choices=['status', 'close', 'restore'], default=None, help='Action to perform: status, close, or restore')
     pycharm_parser.add_argument('--restore', '--restore-last', action='store_true', dest='restore', help='Reopen/restore the last closed PyCharm project')
-    pycharm_parser.add_argument('--close', action='store_true', help='Request graceful close of running PyCharm process')
+    pycharm_parser.add_argument('--close', action='store_true', help='Close ALL windows of an explicit PyCharm PID; requires --entire-process')
+    pycharm_parser.add_argument('--entire-process', action='store_true', help='Explicitly allow closing ALL windows of the selected PID')
     pycharm_parser.add_argument('--force', action='store_true', help='Force kill if process does not exit promptly')
     pycharm_parser.add_argument('--project', help='Specific project directory path')
     pycharm_parser.add_argument('--executable', help='Specific PyCharm executable binary path')
     pycharm_parser.add_argument('--dry-run', action='store_true', help='Report planned action without launching or terminating')
     pycharm_parser.add_argument('--start-ticks')
     pycharm_parser.add_argument('--pid', type=int, help='Target process PID for close operation')
+    pycharm_parser.add_argument('--preflight', action='store_true', help='Require a clear risk check before restore; needs an explicit --project')
+    pycharm_parser.add_argument('--log-dir', type=Path, help='IDE log directory for restore preflight; discovers bounded saved thread dumps')
+    pycharm_parser.add_argument('--thread-dump', type=Path, help='Existing Java dump for restore preflight')
+    pycharm_parser.add_argument('--max-age-seconds', type=int, default=600)
     window = sub.add_parser('window-close', help='Request one explicit X11 window close with PID/start fencing')
     window.add_argument('--xid', type=lambda v: int(v, 0), required=True)
     window.add_argument('--pid', type=int, required=True)
     window.add_argument('--start-ticks', required=True)
+    window.add_argument('--title', help='Expected exact window title; refuse if it changed')
+    window.add_argument('--wait-seconds', type=float, default=2, help='Verify closure for at most 0..10 seconds; never force quit')
+    window.add_argument('--dry-run', action='store_true', help='Verify the explicit window without requesting a close')
+    sub.add_parser('windows', help='Inspect live window identities; never infer the newest window from PID or focus order')
     bundle = sub.add_parser('bundle-export', help='Export one portable snapshot archive without its encryption key')
     bundle.add_argument('snapshot', nargs='?', default='latest')
     bundle.add_argument('--destination', type=Path, required=True)
@@ -159,6 +180,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     try:
+        if args.command == 'doctor':
+            report = inspect_health(log_dir=args.log_dir, thread_dump=args.thread_dump,
+                                    project=args.project, pid=args.pid, expected_start=args.start_ticks,
+                                    max_age_seconds=args.max_age_seconds)
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return report['preflight_exit_code'] if args.preflight else 0
         if args.command == 'inventory':
             print(json.dumps(desktop_inventory(), ensure_ascii=False, indent=2)); return 0
         if args.command == 'jetbrains':
@@ -166,12 +193,30 @@ def main(argv=None):
         if args.command == 'pycharm':
             is_restore = args.restore or (getattr(args, 'action', None) == 'restore')
             is_close = args.close or (getattr(args, 'action', None) == 'close')
+            if args.preflight and (not is_restore or is_close or not args.project):
+                raise RecoveryError('Restore preflight requires restore and an explicit --project; cannot combine with close')
             if is_restore:
+                if args.preflight:
+                    report = inspect_health(log_dir=args.log_dir, thread_dump=args.thread_dump,
+                                            project=args.project, pid=args.pid, expected_start=args.start_ticks,
+                                            max_age_seconds=args.max_age_seconds)
+                    if report['preflight_exit_code']:
+                        print(json.dumps({'action': 'restore-pycharm', 'status': 'blocked_by_preflight',
+                                          'launched': False, 'preflight': report}, ensure_ascii=False, indent=2))
+                        return report['preflight_exit_code']
+                    result = restore_pycharm(project=args.project, executable=args.executable, dry_run=args.dry_run)
+                    print(json.dumps({'action': 'restore-pycharm', 'preflight': report,
+                                      'restore': result}, ensure_ascii=False, indent=2))
+                    return 0
                 print(json.dumps(restore_pycharm(project=args.project, executable=args.executable, dry_run=args.dry_run), ensure_ascii=False, indent=2))
                 return 0
             if is_close:
                 if args.dry_run:
-                    print(json.dumps({'action': 'close-process', 'pid': args.pid, 'start_ticks': args.start_ticks, 'signals_sent': False})); return 0
+                    print(json.dumps({'action': 'close-process', 'pid': args.pid, 'start_ticks': args.start_ticks,
+                                      'scope': 'ALL windows of the selected PID',
+                                      'entire_process_consent': args.entire_process,
+                                      'signals_sent': False})); return 0
+                require_process_consent(args.entire_process)
                 res = close_gui_app(pid=args.pid, name='pycharm', force=args.force, expected_start=args.start_ticks)
                 print(json.dumps(res, ensure_ascii=False, indent=2))
                 return 0
@@ -193,6 +238,7 @@ def main(argv=None):
 
         if args.command == 'apps':
             if args.close:
+                require_process_consent(args.entire_process)
                 target_arg = None if args.close == '__default__' else args.close
                 target_pid = int(target_arg) if target_arg and target_arg.isdigit() else None
                 target_name = target_arg if target_arg and not target_arg.isdigit() else None
@@ -212,13 +258,19 @@ def main(argv=None):
                         print(f"  • PID {a['pid']:<7} | {a['name']:<25} | {a['executable']}{proj}")
             return 0
         if args.command == 'close-app':
+            require_process_consent(args.entire_process)
             target_pid = int(args.target) if args.target and args.target.isdigit() else None
             target_name = args.target if args.target and not args.target.isdigit() else None
             res = close_gui_app(pid=target_pid, name=target_name, force=args.force, expected_start=args.start_ticks)
             print(json.dumps(res, ensure_ascii=False, indent=2))
             return 0
         if args.command == 'window-close':
-            print(json.dumps(request_window_close(args.xid, args.pid, args.start_ticks))); return 0
+            result = close_one_window(args.xid, args.pid, args.start_ticks, title=args.title,
+                                      wait_seconds=args.wait_seconds, dry_run=args.dry_run)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result['status'] in ('closed', 'dry-run') else 1
+        if args.command == 'windows':
+            print(json.dumps(window_inventory(), ensure_ascii=False, indent=2)); return 0
         if args.command == 'bundle-import':
             print(json.dumps(import_bundle(args.source, args.destination), ensure_ascii=False, indent=2)); return 0
         if args.command == 'bundle-transfer':

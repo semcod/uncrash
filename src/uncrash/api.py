@@ -9,12 +9,30 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .recovery import detected_gui_apps, close_gui_app, jetbrains_state
+from .window_control import require_process_consent
+from .health import inspect_health
+from .store import RecoveryError
 from .inventory import desktop_inventory
 from .web_ui import DASHBOARD_HTML
 
 
 # Universal API Registry conforming to wellmanifest/nl-api-llm
 OPERATIONS_REGISTRY = [
+    {
+        "id": "uncrash.health.inspect",
+        "name": "inspect_health",
+        "description": "Read-only, bounded freeze risk inspection of existing IDE evidence and system pressure. No JVM attach or recovery effects.",
+        "protocols": ["cli", "rest", "mcp"],
+        "schema": "uncrash.health/v1",
+        "parameters": {
+            "log_dir": {"type": "string", "required": False},
+            "thread_dump": {"type": "string", "required": False},
+            "project": {"type": "string", "required": False},
+            "pid": {"type": "integer", "required": False},
+            "expected_start": {"type": "string", "required": False},
+            "max_age_seconds": {"type": "integer", "default": 600}
+        }
+    },
     {
         "id": "uncrash.apps.list",
         "name": "list_gui_apps",
@@ -26,13 +44,15 @@ OPERATIONS_REGISTRY = [
     {
         "id": "uncrash.apps.close",
         "name": "close_gui_app",
-        "description": "Safely terminate a user-opened windowed application by PID or name (using SIGTERM with SIGKILL fallback).",
+        "description": "Close ALL windows of an explicit application PID/start identity. Requires entire_process=true; SIGKILL additionally requires force=true.",
         "protocols": ["cli", "rest", "mcp"],
         "schema": "uncrash.action-result/v1",
         "parameters": {
             "pid": {"type": "integer", "description": "Process ID of the application", "required": False},
             "name": {"type": "string", "description": "Application name or substring (e.g. 'pycharm', 'chrome')", "required": False},
-            "force": {"type": "boolean", "description": "Force immediate termination (SIGKILL) if unresponsive", "default": False}
+            "force": {"type": "boolean", "description": "Force immediate termination (SIGKILL) if unresponsive", "default": False},
+            "expected_start": {"type": "string", "description": "Expected process start ticks from application inventory", "required": True},
+            "entire_process": {"type": "boolean", "description": "Explicitly permit closing ALL windows of the selected PID", "default": False}
         }
     },
     {
@@ -158,7 +178,7 @@ def create_fastapi_app(store=None, config=None):
     """Create FastAPI REST application with integrated Web Client dashboard."""
     from fastapi import FastAPI, HTTPException
     from fastapi.responses import HTMLResponse, FileResponse
-    from pydantic import BaseModel
+    from pydantic import BaseModel, StrictBool
 
     app = FastAPI(
         title="Uncrash Multi-Protocol API & Dashboard",
@@ -171,8 +191,9 @@ def create_fastapi_app(store=None, config=None):
     class CloseAppRequest(BaseModel):
         pid: Optional[int] = None
         name: Optional[str] = None
-        force: bool = False
+        force: StrictBool = False
         expected_start: Optional[str] = None
+        entire_process: StrictBool = False
 
     @app.get("/", response_class=HTMLResponse)
     @app.get("/ui", response_class=HTMLResponse)
@@ -196,17 +217,31 @@ def create_fastapi_app(store=None, config=None):
         apps = detected_gui_apps()
         return {"schema": "uncrash.gui-apps/v1", "count": len(apps), "applications": apps}
 
-    @app.post("/api/v1/apps/close")
-    def post_close_app(req: CloseAppRequest):
+    def post_close_app(req):
         try:
+            require_process_consent(req.entire_process)
             res = close_gui_app(pid=req.pid, name=req.name, force=req.force, expected_start=req.expected_start)
             return res
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
+    # Resolve the function-local model before FastAPI reads postponed annotations.
+    post_close_app.__annotations__['req'] = CloseAppRequest
+    app.post('/api/v1/apps/close')(post_close_app)
+
     @app.get("/api/v1/jetbrains")
     def get_jetbrains():
         return jetbrains_state()
+
+    @app.get('/api/v1/doctor')
+    def get_doctor(log_dir: Optional[str] = None, thread_dump: Optional[str] = None,
+                   project: Optional[str] = None, pid: Optional[int] = None,
+                   expected_start: Optional[str] = None, max_age_seconds: int = 600):
+        try:
+            return inspect_health(log_dir=log_dir, thread_dump=thread_dump, project=project,
+                                  pid=pid, expected_start=expected_start, max_age_seconds=max_age_seconds)
+        except RecoveryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/v1/inventory")
     def get_inventory():
@@ -370,10 +405,13 @@ def create_fastapi_app(store=None, config=None):
 
 def create_mcp_server(store=None, config=None):
     """Create Model Context Protocol (MCP) server for uncrash."""
+    from pydantic import StrictBool
+
     resolved_store, resolved_config = _resolve_default_store(store, config)
 
     try:
         from mcp.server.mcpserver import MCPServer
+        from mcp.server.mcpserver.exceptions import ToolError
         mcp = MCPServer(
             name="uncrash",
             version="0.1.2",
@@ -381,6 +419,7 @@ def create_mcp_server(store=None, config=None):
         )
     except (ImportError, ModuleNotFoundError):
         from mcp.server.fastmcp import FastMCP
+        from mcp.server.fastmcp.exceptions import ToolError
         class FastMCPCompat:
             def __init__(self, name: str, version: str = "0.1.2", description: Optional[str] = None):
                 self._server = FastMCP(name)
@@ -417,13 +456,32 @@ def create_mcp_server(store=None, config=None):
         apps = detected_gui_apps()
         return json.dumps({"count": len(apps), "applications": apps}, ensure_ascii=False, indent=2)
 
-    @mcp.tool(
-        name="uncrash_close_gui_app",
-        description="Close a whole application process using explicit PID and expected_start; force is opt-in. This is not a single-window close."
-    )
-    def mcp_close_gui_app(pid: Optional[int] = None, name: Optional[str] = None, force: bool = False, expected_start: Optional[str] = None) -> str:
+    @mcp.tool(name='uncrash_inspect_health', description='Read-only freeze risk preflight from existing IDE logs/dump and system pressure; no JVM attach or process signals.')
+    def mcp_health(log_dir: Optional[str] = None, thread_dump: Optional[str] = None,
+                   project: Optional[str] = None, pid: Optional[int] = None,
+                   expected_start: Optional[str] = None, max_age_seconds: int = 600) -> str:
+        try:
+            return json.dumps(inspect_health(log_dir=log_dir, thread_dump=thread_dump, project=project,
+                                            pid=pid, expected_start=expected_start,
+                                            max_age_seconds=max_age_seconds), ensure_ascii=False)
+        except RecoveryError as exc:
+            raise ToolError(str(exc)) from exc
+
+    def mcp_close_gui_app(pid: Optional[int] = None, name: Optional[str] = None, force: bool = False, expected_start: Optional[str] = None, entire_process: bool = False) -> str:
+        try:
+            require_process_consent(entire_process)
+        except RecoveryError as exc:
+            raise ToolError(str(exc)) from exc
         res = close_gui_app(pid=pid, name=name, force=force, expected_start=expected_start)
         return json.dumps(res, ensure_ascii=False, indent=2)
+
+    # Bind actual types before either MCP backend resolves postponed annotations.
+    # Coercing 1 or "yes" to True would bypass the literal consent boundary.
+    mcp_close_gui_app.__annotations__.update(force=StrictBool, entire_process=StrictBool)
+    mcp.tool(
+        name="uncrash_close_gui_app",
+        description="Close ALL windows of an explicit application PID/expected_start. Requires entire_process=true; force is a separate opt-in. Both flags require literal JSON booleans."
+    )(mcp_close_gui_app)
 
     @mcp.tool(
         name="uncrash_get_jetbrains_state",
