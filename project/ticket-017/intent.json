@@ -1,0 +1,85 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-017",
+  "summary": "Close SQLite recovery handles before cleanup and redact failure details",
+  "workstream": "application",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-017/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/recovery.py",
+    "tests/test_diagnostics.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [
+    "ticket-015"
+  ],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "b28b6ebc1c92209301966e81fb25a857e1b326f9",
+    "targetBranch": "main",
+    "outcome": "Finish the two source changes preserved from ticket-015: close SQLite connections before temporary directory cleanup on failure and redact potentially private SQLite exception text. Validate and publish through protected independent review.",
+    "nonGoals": [
+      "No actual user session database repair or IDE restart",
+      "No edits to governance adoption ticket-016 or protected policy"
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 25,
+    "budgets": {
+      "maxImplementationFiles": 2,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Keep existing salvage API and receipt shape; close handles within staging lifetime and return generic failure finding.",
+      "components": [
+        {
+          "name": "session-storage",
+          "paths": [
+            "src/uncrash/recovery.py",
+            "tests/test_diagnostics.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Protected revert of this small follow-up."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "python -m pytest tests/test_diagnostics.py -q"
+        ],
+        "evidence": "Injected failed import contains a private marker; output remains absent, both connections are closed when directory cleanup begins, and receipt excludes marker."
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "python -m pytest -q",
+          "./project/governance-check.sh --base b28b6ebc1c92209301966e81fb25a857e1b326f9",
+          "protected native OneDev and independent Validator"
+        ],
+        "evidence": "Full suite and protected exact-head gates pass."
+      }
+    ]
+  }
+}
