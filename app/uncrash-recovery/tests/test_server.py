@@ -276,5 +276,114 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual([r['url'] for r in result], [r['novnc_url'] for r in rows])
 
 
+BODY = b'<div id="noVNC_container"></div><script type="module" src="./app/ui.js"></script>'
+
+
+class SlowHandler(BaseHTTPRequestHandler):
+    def log_message(self, *_):
+        pass
+
+    def do_GET(self):
+        header = (b'HTTP/1.0 200 OK\r\nContent-Type: text/html\r\nContent-Length: '
+                  + str(len(BODY)).encode() + b'\r\n\r\n')
+        try:
+            if self.path == '/headers':
+                for start in range(0, len(header), 4):
+                    self.connection.sendall(header[start:start + 4])
+                    time.sleep(0.03)
+                self.connection.sendall(BODY)
+            else:
+                self.connection.sendall(header)
+                for start in range(0, len(BODY), 3):
+                    self.connection.sendall(BODY[start:start + 3])
+                    time.sleep(0.03)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+
+class TotalDeadlineTests(unittest.TestCase):
+    def setUp(self):
+        self.server = ThreadingHTTPServer(('127.0.0.1', 0), SlowHandler)
+        self.server.daemon_threads = True
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.cleanup)
+
+    def cleanup(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(2)
+
+    def check(self, path):
+        start = time.monotonic()
+        result = preview_available(f'http://127.0.0.1:{self.server.server_port}/{path}')
+        elapsed = time.monotonic() - start
+        self.assertFalse(result, 'Socket idle timeout must not renew the total preview budget')
+        self.assertLess(elapsed, 0.5, 'Headers and body share one monotonic deadline')
+
+    def test_slow_body_cannot_extend_total_deadline(self):
+        self.check('body')
+
+    def test_slow_headers_cannot_extend_total_deadline(self):
+        self.check('headers')
+
+
+class FramingPreviewHandler(BaseHTTPRequestHandler):
+    def log_message(self, *_):
+        pass
+
+    def do_GET(self):
+        chunked = "chunked" in self.path
+        slow = self.path.startswith("/slow")
+        headers = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n"
+        headers += b"Transfer-Encoding: chunked\r\n" if chunked else b""
+        try:
+            self.connection.sendall(headers + b"\r\n")
+            for offset in range(0, len(BODY), 3):
+                part = BODY[offset:offset + 3]
+                payload = (f"{len(part):x}\r\n".encode() + part + b"\r\n") if chunked else part
+                self.connection.sendall(payload)
+                if slow:
+                    time.sleep(0.03)
+            if chunked:
+                self.connection.sendall(b"0\r\n\r\n")
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        self.close_connection = True
+
+
+class FramingDeadlineTests(unittest.TestCase):
+    def setUp(self):
+        self.http = ThreadingHTTPServer(("127.0.0.1", 0), FramingPreviewHandler)
+        self.http.daemon_threads = True
+        self.thread = threading.Thread(target=self.http.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.stop)
+
+    def stop(self):
+        self.http.shutdown()
+        self.http.server_close()
+        self.thread.join(2)
+
+    def check(self, path, expected):
+        start = time.monotonic()
+        result = preview_available(f"http://127.0.0.1:{self.http.server_port}/{path}")
+        elapsed = time.monotonic() - start
+        self.assertEqual(result, expected)
+        self.assertLess(elapsed, 0.5, "Every framing mode shares the total deadline")
+
+    def test_slow_connection_close_body_is_bounded(self):
+        self.check("slow-close", False)
+
+    def test_slow_chunked_body_is_bounded(self):
+        self.check("slow-chunked", False)
+
+    def test_fast_connection_close_body_is_available(self):
+        self.check("fast-close", True)
+
+    def test_fast_chunked_body_is_available(self):
+        self.check("fast-chunked", True)
+
+
 if __name__ == '__main__':
     unittest.main()
