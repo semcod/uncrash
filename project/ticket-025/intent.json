@@ -1,0 +1,96 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-025",
+  "summary": "Reject unbounded TAR extension headers before recovery import allocation",
+  "workstream": "application",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "requested"
+  },
+  "allowedPaths": [
+    "project/ticket-025/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/recovery.py",
+    "tests/test_portable_bundle_headers.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "bc786315f62fd0f771f9692b3b9c0a4d35995f99",
+    "targetBranch": "main",
+    "outcome": "Fix confirmed PLF004 portable recovery import memory exhaustion, validate through Willman, publish through protected OneDev and independent Validator.",
+    "nonGoals": [
+      "No existing IDE/session actions, remote bundle transfer, deployment, dependency changes or protected CI changes.",
+      "Preserve unresolved Willmux271 protected publication criterion and its existing evidence."
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 30,
+    "budgets": {
+      "maxImplementationFiles": 2,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "A TarInfo subclass validates raw headers before tarfile processes extension bodies. Accept only plain regular records emitted by the existing USTAR exporter; reject PAX/GNU extension, sparse/nonregular and over-budget raw headers. Existing payload digests, inventory and file-state restoration stay in the importer.",
+      "components": [
+        {
+          "name": "portable recovery import",
+          "paths": [
+            "src/uncrash/recovery.py",
+            "tests/test_portable_bundle_headers.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Protected revert of the material implementation; no persisted format migration."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "python -m pytest tests/test_portable_bundle_headers.py -q"
+        ],
+        "evidence": "512-byte PAX/GNU fixtures are rejected without extension-sized reads; unsupported member types and raw byte budgets fail before import writes."
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "python -m pytest tests/test_native.py tests/test_portable_bundle_headers.py -q"
+        ],
+        "evidence": "Valid plaintext/encrypted exporter/importer roundtrip passes; corrupted and malicious archives remain rejected."
+      },
+      {
+        "criterion": "AC-03",
+        "commands": [
+          "python -m pytest tests -q",
+          "./project/governance-check.sh --base bc786315f62fd0f771f9692b3b9c0a4d35995f99"
+        ],
+        "evidence": "Standard source suite, required X11 and managed gates pass via Willman."
+      },
+      {
+        "criterion": "AC-04",
+        "commands": [
+          "protected exact-head OneDev and independent Validator"
+        ],
+        "evidence": "Trusted approval and protected merge of frozen candidate; no direct merge."
+      }
+    ]
+  }
+}

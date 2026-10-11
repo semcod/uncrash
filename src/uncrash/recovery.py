@@ -146,6 +146,18 @@ def export_bundle(store, snapshot, destination):
         if temporary.exists(): temporary.unlink()
 
 
+class _BundleTarInfo(tarfile.TarInfo):
+    """Validate raw headers before tarfile reads PAX, GNU or sparse metadata."""
+
+    def _proc_member(self, archive):
+        # Both legacy and current CPython enter this hook before reading metadata.
+        if self.type not in (tarfile.REGTYPE, tarfile.AREGTYPE):
+            raise RecoveryError('Only plain regular bundle archive members are supported')
+        if not 0 <= self.size <= MAX_FILE:
+            raise RecoveryError('Bundle archive member exceeds byte budget')
+        return super()._proc_member(archive)
+
+
 def import_bundle(source, destination):
     destination = no_links(destination)
     if destination.exists() or destination in (Path('/'), Path.home()):
@@ -156,7 +168,7 @@ def import_bundle(source, destination):
         if before.st_size > MAX_BYTES + 64 * 1024**2:
             raise RecoveryError('Archive exceeds byte budget')
         try:
-            with tarfile.open(fileobj=stream, mode='r:') as archive:
+            with tarfile.open(fileobj=stream, mode='r:', tarinfo=_BundleTarInfo) as archive:
                 first = archive.next()
                 if first is None or first.name != 'bundle.json' or not first.isfile() or first.size > 4 * 1024**2:
                     raise RecoveryError('Bundle metadata must be the first regular archive member')
