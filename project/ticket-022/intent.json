@@ -1,0 +1,94 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-022",
+  "summary": "Accelerate session hosts inspection via native proc scan",
+  "workstream": "application",
+  "classification": {
+    "kind": "FEATURE",
+    "priority": "P2",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-022/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/diagnostics.py",
+    "src/uncrash/snapshot.rs",
+    "tests/test_diagnostics.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [
+    "ticket-020",
+    "ticket-021"
+  ],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "d13a5b50660d22d66893092ad3549266b9735ac7",
+    "targetBranch": "main",
+    "outcome": "Accelerate session hosts discovery and process ancestry inspection via native proc scanning in Rust with multi-reading and bounded metadata capture, preserving exact Python parity and fallback.",
+    "nonGoals": [
+      "No external C library dependencies or system package additions",
+      "No changes to public CLI interface or JSON diagnostic schema contracts"
+    ],
+    "complexity": "M",
+    "estimatedMinutes": 60,
+    "budgets": {
+      "maxImplementationFiles": 4,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Implement native --session-hosts subcommand in snapshot.rs using safe nonblocking reads, UID fencing, and ancestry tree reconstruction, while retaining 100% Python fallback in diagnostics.session_hosts.",
+      "components": [
+        {
+          "name": "diagnostics-session-hosts",
+          "paths": [
+            "src/uncrash/snapshot.rs",
+            "src/uncrash/diagnostics.py",
+            "tests/test_diagnostics.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Revert commit on main; retain previous diagnostics release."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "python -m pytest tests/test_diagnostics.py -q"
+        ],
+        "evidence": "Native session hosts inspection matches Python fallback across PID/UID fencing, process names, executable resolution, cmdline filtering, and ancestor stability."
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "python -m pytest tests/test_diagnostics.py -q"
+        ],
+        "evidence": "Native proc scan safely handles unstable processes, non-decimal directories, and missing/inaccessible proc nodes."
+      },
+      {
+        "criterion": "AC-03",
+        "commands": [
+          "python -m pytest -q",
+          "./project/governance-check.sh --base d13a5b50660d22d66893092ad3549266b9735ac7"
+        ],
+        "evidence": "All tests pass without regression; governance clean; publication via OneDev and independent Validator."
+      }
+    ]
+  }
+}

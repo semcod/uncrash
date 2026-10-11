@@ -48,9 +48,38 @@ def _read_json(path, maximum=32 * 1024**2):
     return json.loads(raw), raw
 
 
-def session_hosts(proc_root=Path('/proc')):
+def native_session_hosts(proc_root: Path = Path('/proc'), state_root: Path = None) -> dict | None:
+    """Attempt fast native Rust scan of /proc session hosts; returns None if native worker is unavailable."""
+    try:
+        proc_root = no_links(proc_root)
+    except (OSError, RecoveryError):
+        return None
+    binary = find_native_worker(state_root)
+    if binary is None:
+        return None
+    try:
+        proc = subprocess.run(
+            [str(binary), '--session-hosts', str(proc_root)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if proc.returncode == 0:
+            data = json.loads(proc.stdout.strip() or '{}')
+            if isinstance(data, dict) and data.get('schema') == 'uncrash.session-hosts/v1':
+                data['observed_at'] = datetime.now(timezone.utc).isoformat()
+                return data
+    except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def session_hosts(proc_root=Path('/proc'), state_root=None):
     """Observe PID/start identity twice; source labels never determine the host."""
     proc_root = Path(proc_root)
+    native_data = native_session_hosts(proc_root, state_root=state_root)
+    if native_data is not None:
+        return native_data
     now = datetime.now(timezone.utc).isoformat()
     try:
         boot = (proc_root / 'sys/kernel/random/boot_id').read_text().strip()
@@ -104,7 +133,8 @@ def session_hosts(proc_root=Path('/proc')):
         except (OSError, ValueError, IndexError):
             rejected['unavailable'] += 1
     rows = []
-    for pid, node in nodes.items():
+    for pid in sorted(nodes):
+        node = nodes[pid]
         if not node['provider']: continue
         chain = []; seen = {pid}; cursor = node['ppid']; host = None; stable = True
         while cursor in nodes and cursor not in seen:
@@ -536,7 +566,7 @@ def snapshot_health(state, interval=300, now=None):
 
 def diagnose(home=None, state=None, interval=300):
     home = Path(home or Path.home()); state = Path(state or home / '.local/state/uncrash')
-    current = session_hosts(); inventory = provider_inventory(home, state_root=state); backups = snapshot_health(state, interval)
+    current = session_hosts(state_root=state); inventory = provider_inventory(home, state_root=state); backups = snapshot_health(state, interval)
     agent_health = check_agent_storage_health(home)
     findings = []
     if backups['stale']: findings.append('UNCRASH-BACKUP-STALE')

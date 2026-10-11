@@ -1,7 +1,7 @@
 //! Linux snapshot worker: stable reads, OpenSSL SHA256/AES-GCM, zlib, COW/cached copies.
 //! Private stdin protocol; stdout contains metadata only. No shell or network execution.
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     ffi::{c_int, c_ulong, c_void, CString},
     fs::{self, File, Metadata},
     io::{self, Read, Seek, Write},
@@ -72,6 +72,7 @@ extern "C" {
         len: usize,
         flags: u32,
     ) -> isize;
+    fn getuid() -> u32;
 }
 const NONBLOCK: c_int = 0o4000;
 const NOFOLLOW: c_int = 0o400000;
@@ -2411,6 +2412,448 @@ fn run_provider_inventory(args: &[String]) -> io::Result<()> {
     );
     Ok(())
 }
+const PROVIDERS: &[&str] = &["codex", "claude", "agy"];
+const HOSTS: &[(&str, &str)] = &[
+    ("gnome-terminal-server", "GNOME Terminal"),
+    ("gnome-terminal-", "GNOME Terminal"),
+    ("konsole", "Konsole"),
+    ("xterm", "xterm"),
+    ("kitty", "Kitty"),
+    ("alacritty", "Alacritty"),
+    ("wezterm-gui", "WezTerm"),
+    ("code", "VS Code"),
+    ("code-insiders", "VS Code Insiders"),
+    ("pycharm", "PyCharm"),
+    ("idea", "IntelliJ IDEA"),
+    ("webstorm", "WebStorm"),
+    ("goland", "GoLand"),
+    ("clion", "CLion"),
+    ("rider", "Rider"),
+];
+
+fn lookup_host(key: &str) -> Option<&'static str> {
+    for &(k, v) in HOSTS {
+        if k == key {
+            return Some(v);
+        }
+    }
+    None
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct StatInfo {
+    pid: i64,
+    ppid: i64,
+    start_ticks: String,
+    session_id: i64,
+    tty_nr: i64,
+}
+
+fn read_stat_file(proc_root: &Path, pid_str: &str) -> Option<StatInfo> {
+    let p = proc_root.join(pid_str);
+    let raw = fs::read_to_string(p.join("stat")).ok()?;
+    let rparen = raw.rfind(')')?;
+    let rest = &raw[rparen + 1..];
+    let fields: Vec<&str> = rest.split_whitespace().collect();
+    if fields.len() <= 19 {
+        return None;
+    }
+    let pid = pid_str.parse::<i64>().ok()?;
+    let ppid = fields[1].parse::<i64>().ok()?;
+    let session_id = fields[3].parse::<i64>().ok()?;
+    let tty_nr = fields[4].parse::<i64>().ok()?;
+    let start_ticks = fields[19].to_string();
+    Some(StatInfo {
+        pid,
+        ppid,
+        start_ticks,
+        session_id,
+        tty_nr,
+    })
+}
+
+#[derive(Clone, Debug)]
+struct ProcNode {
+    stat: StatInfo,
+    name: String,
+    executable: String,
+    provider: Option<String>,
+    host_app: Option<String>,
+    role: String,
+    cwd: Option<String>,
+    terminal: Option<String>,
+    pid_namespace: Option<String>,
+    inherited_markers: Vec<(String, String)>,
+}
+
+fn run_session_hosts(args: &[String]) -> io::Result<()> {
+    let proc_root = if !args.is_empty() {
+        Path::new(&args[0])
+    } else {
+        Path::new("/proc")
+    };
+
+    let _proc_guard = match open(proc_root, DIRECTORY) {
+        Ok(g) => g,
+        Err(_) => return Err(fail()),
+    };
+
+    let entries = match fs::read_dir(proc_root) {
+        Ok(e) => e,
+        Err(_) => return Err(fail()),
+    };
+
+    let boot_id = fs::read_to_string(proc_root.join("sys/kernel/random/boot_id"))
+        .ok()
+        .map(|s| s.trim().to_string());
+
+    let my_uid = unsafe { getuid() };
+    let mut nodes: HashMap<i64, ProcNode> = HashMap::new();
+    let mut rejected_unavailable = 0usize;
+    let mut rejected_identity_changed = 0usize;
+
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let p = proc_root.join(&name);
+        let smeta = match fs::symlink_metadata(&p) {
+            Ok(m) => m,
+            Err(_) => {
+                rejected_unavailable += 1;
+                continue;
+            }
+        };
+        if smeta.uid() != my_uid {
+            continue;
+        }
+        let before = match read_stat_file(proc_root, &name) {
+            Some(s) => s,
+            None => {
+                rejected_unavailable += 1;
+                continue;
+            }
+        };
+        let comm_name = match fs::read_to_string(p.join("comm")) {
+            Ok(s) => s.trim().to_string(),
+            Err(_) => {
+                rejected_unavailable += 1;
+                continue;
+            }
+        };
+        let exe = match fs::read_link(p.join("exe")) {
+            Ok(path) => path.to_string_lossy().to_string(),
+            Err(_) => {
+                rejected_unavailable += 1;
+                continue;
+            }
+        };
+        let basename = Path::new(&exe)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        let mut provider = if PROVIDERS.contains(&basename.as_str()) {
+            Some(basename.clone())
+        } else {
+            None
+        };
+        let mut role = "unknown".to_string();
+        let mut effective_basename = basename.clone();
+
+        if provider.is_some() || basename == "node" || basename == "nodejs" || basename == "java" {
+            let cmdline_bytes = match fs::read(p.join("cmdline")) {
+                Ok(b) => b,
+                Err(_) => {
+                    rejected_unavailable += 1;
+                    continue;
+                }
+            };
+            let limit = cmdline_bytes.len().min(65536);
+            let cmdline_slice = &cmdline_bytes[..limit];
+            let args: Vec<&[u8]> = cmdline_slice.split(|&b| b == 0).collect();
+
+            if (basename == "node" || basename == "nodejs") && args.len() > 1 {
+                let entry = String::from_utf8_lossy(args[1]);
+                if entry.contains("/@anthropic-ai/claude-code/") {
+                    provider = Some("claude".to_string());
+                }
+                if entry.contains("/@openai/codex/") {
+                    provider = Some("codex".to_string());
+                }
+            }
+            let slice_1_3 = if args.len() > 1 {
+                let end = args.len().min(3);
+                &args[1..end]
+            } else {
+                &[][..]
+            };
+            if slice_1_3.iter().any(|&arg| arg == b"app-server") {
+                role = "server".to_string();
+            } else if slice_1_3.iter().any(|&arg| arg == b"exec") {
+                role = "automation".to_string();
+            }
+            if basename == "java" {
+                let selectors: Vec<&[u8]> = args
+                    .iter()
+                    .copied()
+                    .filter(|a| a.starts_with(b"-Didea.paths.selector="))
+                    .collect();
+                for &(token, _label) in HOSTS {
+                    let token_lower = token.to_ascii_lowercase();
+                    let token_bytes = token_lower.as_bytes();
+                    if selectors.iter().any(|sel| {
+                        let sel_lower: Vec<u8> =
+                            sel.iter().map(|b| b.to_ascii_lowercase()).collect();
+                        sel_lower.windows(token_bytes.len()).any(|w| w == token_bytes)
+                    }) {
+                        effective_basename = token.to_string();
+                        break;
+                    }
+                }
+            }
+        }
+        let host_app = lookup_host(&effective_basename)
+            .or_else(|| lookup_host(&comm_name))
+            .map(|s| s.to_string());
+
+        let mut cwd = None;
+        let mut terminal = None;
+        let mut pid_namespace = None;
+        let mut inherited_markers = Vec::new();
+
+        if provider.is_some() {
+            let cwd_path = match fs::read_link(p.join("cwd")) {
+                Ok(path) => path.to_string_lossy().to_string(),
+                Err(_) => {
+                    rejected_unavailable += 1;
+                    continue;
+                }
+            };
+            cwd = Some(cwd_path);
+
+            let stdin_path = match fs::read_link(p.join("fd/0")) {
+                Ok(path) => path.to_string_lossy().to_string(),
+                Err(_) => {
+                    rejected_unavailable += 1;
+                    continue;
+                }
+            };
+            terminal = if stdin_path.starts_with("/dev/pts/") {
+                Some(stdin_path)
+            } else {
+                None
+            };
+            if terminal.is_some() && role == "unknown" {
+                role = "client".to_string();
+            }
+
+            let ns_path = match fs::read_link(p.join("ns/pid")) {
+                Ok(path) => path.to_string_lossy().to_string(),
+                Err(_) => {
+                    rejected_unavailable += 1;
+                    continue;
+                }
+            };
+            pid_namespace = Some(ns_path);
+
+            let env_bytes = match fs::read(p.join("environ")) {
+                Ok(b) => b,
+                Err(_) => {
+                    rejected_unavailable += 1;
+                    continue;
+                }
+            };
+            let limit = env_bytes.len().min(262144);
+            let mut markers_map: BTreeMap<String, String> = BTreeMap::new();
+            for field in env_bytes[..limit].split(|&b| b == 0) {
+                if let Some(pos) = field.iter().position(|&b| b == b'=') {
+                    let k = &field[..pos];
+                    let v = &field[pos + 1..];
+                    if k == b"TERMINAL_EMULATOR" || k == b"TERM_SESSION_ID" {
+                        let v_capped = &v[..v.len().min(256)];
+                        let k_str = String::from_utf8_lossy(k).to_string();
+                        let v_str = String::from_utf8_lossy(v_capped).to_string();
+                        markers_map.insert(k_str, v_str);
+                    }
+                }
+            }
+            inherited_markers = markers_map.into_iter().collect();
+        }
+
+        let after = match read_stat_file(proc_root, &name) {
+            Some(s) => s,
+            None => {
+                rejected_unavailable += 1;
+                continue;
+            }
+        };
+        if before != after {
+            rejected_identity_changed += 1;
+            continue;
+        }
+
+        nodes.insert(
+            before.pid,
+            ProcNode {
+                stat: before,
+                name: comm_name,
+                executable: exe,
+                provider,
+                host_app,
+                role,
+                cwd,
+                terminal,
+                pid_namespace,
+                inherited_markers,
+            },
+        );
+    }
+
+    let mut rows_json = Vec::new();
+    let mut pids: Vec<i64> = nodes.keys().copied().collect();
+    pids.sort();
+
+    for pid in pids {
+        let node = &nodes[&pid];
+        if node.provider.is_none() {
+            continue;
+        }
+        let mut chain = Vec::new();
+        let mut seen = HashSet::new();
+        seen.insert(pid);
+        let mut cursor = node.stat.ppid;
+        let mut host = None;
+        let mut stable = true;
+
+        while let Some(parent) = nodes.get(&cursor) {
+            if seen.contains(&cursor) {
+                break;
+            }
+            seen.insert(cursor);
+            chain.push(parent);
+            if let (Ok(p_ticks), Ok(n_ticks)) = (
+                parent.stat.start_ticks.parse::<i128>(),
+                node.stat.start_ticks.parse::<i128>(),
+            ) {
+                if p_ticks > n_ticks {
+                    stable = false;
+                }
+            }
+            if host.is_none() && parent.host_app.is_some() {
+                host = parent.host_app.clone();
+            }
+            cursor = parent.stat.ppid;
+        }
+
+        let members = std::iter::once(&node.stat).chain(chain.iter().map(|p| &p.stat));
+        for member in members {
+            match read_stat_file(proc_root, &member.pid.to_string()) {
+                Some(curr) => {
+                    if curr.pid != member.pid
+                        || curr.ppid != member.ppid
+                        || curr.start_ticks != member.start_ticks
+                    {
+                        stable = false;
+                    }
+                }
+                None => {
+                    stable = false;
+                }
+            }
+        }
+        if !stable {
+            host = None;
+        }
+
+        let current_host = host.as_deref().unwrap_or("unknown");
+        let host_evidence = if host.is_some() {
+            "process-ancestry"
+        } else {
+            "unresolved"
+        };
+        let launch_host_inference = if node
+            .inherited_markers
+            .iter()
+            .any(|(k, v)| k == "TERMINAL_EMULATOR" && v == "JetBrains-JediTerm")
+        {
+            "\"JetBrains\""
+        } else {
+            "null"
+        };
+
+        let mut ancestors_json = Vec::new();
+        for p in &chain {
+            let p_host = match &p.host_app {
+                Some(h) => format!("\"{}\"", json_escape(h)),
+                None => "null".to_string(),
+            };
+            ancestors_json.push(format!(
+                "{{\"pid\":{},\"ppid\":{},\"start_ticks\":\"{}\",\"name\":\"{}\",\"host_app\":{}}}",
+                p.stat.pid,
+                p.stat.ppid,
+                json_escape(&p.stat.start_ticks),
+                json_escape(&p.name),
+                p_host
+            ));
+        }
+
+        let mut markers_json = Vec::new();
+        for (k, v) in &node.inherited_markers {
+            markers_json.push(format!("\"{}\":\"{}\"", json_escape(k), json_escape(v)));
+        }
+
+        let opt_str = |val: &Option<String>| match val {
+            Some(s) => format!("\"{}\"", json_escape(s)),
+            None => "null".to_string(),
+        };
+
+        rows_json.push(format!(
+            "{{\"pid\":{},\"ppid\":{},\"start_ticks\":\"{}\",\"session_id\":{},\"tty_nr\":{},\"name\":\"{}\",\"executable\":\"{}\",\"provider\":{},\"role\":\"{}\",\"cwd\":{},\"terminal\":{},\"pid_namespace\":{},\"inherited_markers\":{{{}}},\"current_host\":\"{}\",\"ancestry_stable\":{},\"ancestors\":[{}],\"host_evidence\":\"{}\",\"conversation_id\":null,\"conversation_binding\":\"unresolved\",\"launch_host_inference\":{}}}",
+            node.stat.pid,
+            node.stat.ppid,
+            json_escape(&node.stat.start_ticks),
+            node.stat.session_id,
+            node.stat.tty_nr,
+            json_escape(&node.name),
+            json_escape(&node.executable),
+            opt_str(&node.provider),
+            json_escape(&node.role),
+            opt_str(&node.cwd),
+            opt_str(&node.terminal),
+            opt_str(&node.pid_namespace),
+            markers_json.join(","),
+            json_escape(current_host),
+            stable,
+            ancestors_json.join(","),
+            json_escape(host_evidence),
+            launch_host_inference
+        ));
+    }
+
+    let boot_id_json = match boot_id {
+        Some(b) => format!("\"{}\"", json_escape(&b)),
+        None => "null".to_string(),
+    };
+
+    let mut rejected_entries = Vec::new();
+    if rejected_identity_changed > 0 {
+        rejected_entries.push(format!("\"identity_changed\":{}", rejected_identity_changed));
+    }
+    if rejected_unavailable > 0 {
+        rejected_entries.push(format!("\"unavailable\":{}", rejected_unavailable));
+    }
+
+    println!(
+        "{{\"schema\":\"uncrash.session-hosts/v1\",\"observed_at\":\"\",\"boot_id\":{},\"processes\":[{}],\"rejected_observations\":{{{}}},\"limitations\":[\"Process ancestry describes observed containment, not a window or tab ID.\",\"Shared servers and inherited markers do not bind conversations to interactive clients.\",\"Reparented, multiplexed, remote or container clients can remain unresolved.\"]}}",
+        boot_id_json,
+        rows_json.join(","),
+        rejected_entries.join(",")
+    );
+    Ok(())
+}
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -2425,6 +2868,9 @@ fn main() -> io::Result<()> {
     }
     if args.len() > 1 && args[1] == "--provider-inventory" {
         return run_provider_inventory(&args[2..]);
+    }
+    if args.len() > 1 && args[1] == "--session-hosts" {
+        return run_session_hosts(&args[2..]);
     }
     let mut input = String::new();
     io::stdin()
