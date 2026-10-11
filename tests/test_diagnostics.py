@@ -242,3 +242,27 @@ def test_salvage_agent_session_db(tmp_path):
         cnt = c.execute('SELECT count(*) FROM steps').fetchone()[0]
         assert cnt == 1
 
+
+def test_diagnose_includes_agent_health_and_session_corruption_findings(tmp_path):
+    home = tmp_path / 'home'
+    conv_dir = home / '.gemini/antigravity-cli/conversations'
+    conv_dir.mkdir(parents=True)
+    bad_db = conv_dir / 'corrupt.db'
+    bad_db.write_bytes(b'SQLite format 3\x00' + b'\xff' * 100)
+
+    log_dir = home / '.gemini/antigravity-cli/log'
+    log_dir.mkdir(parents=True)
+    panic_log = log_dir / 'panic.log'
+    panic_log.write_text("Caught panic: runtime error: invalid memory address or nil pointer dereference\n")
+
+    state = tmp_path / 'state'
+    state.mkdir()
+    (state / 'snapshots').mkdir()
+
+    report = d.diagnose(home=home, state=state)
+    assert 'agent_health' in report
+    assert report['agent_health']['status'] == 'CORRUPTED'
+    assert 'UNCRASH-SESSION-STORAGE-CORRUPTED' in report['findings']
+    assert 'UNCRASH-AGENT-PANIC-DETECTED' in report['findings']
+
+

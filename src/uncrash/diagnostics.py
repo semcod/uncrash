@@ -333,14 +333,18 @@ def snapshot_health(state, interval=300, now=None):
 def diagnose(home=None, state=None, interval=300):
     home = Path(home or Path.home()); state = Path(state or home / '.local/state/uncrash')
     current = session_hosts(); inventory = provider_inventory(home); backups = snapshot_health(state, interval)
+    agent_health = check_agent_storage_health(home)
     findings = []
     if backups['stale']: findings.append('UNCRASH-BACKUP-STALE')
     if backups['stale'] is None: findings.append('UNCRASH-MANIFEST-UNVERIFIED')
     if backups['invalid_manifests']: findings.append('UNCRASH-MANIFEST-INVALID')
     if inventory['agy'].get('summary_without_file', 0): findings.append('UNCRASH-SESSION-FILE-MISSING')
     if any(p['conversation_id'] is None for p in current['processes']): findings.append('UNCRASH-HOST-BINDING-UNKNOWN')
+    if agent_health.get('corrupted_sessions'): findings.append('UNCRASH-SESSION-STORAGE-CORRUPTED')
+    if agent_health.get('detected_panics'): findings.append('UNCRASH-AGENT-PANIC-DETECTED')
     return {'schema': 'uncrash.diagnostics/v1', 'observed_at': current['observed_at'],
-            'current': current, 'providers': inventory, 'backups': backups, 'findings': findings,
+            'current': current, 'providers': inventory, 'backups': backups,
+            'agent_health': agent_health, 'findings': findings,
             'applications_restarted': False, 'signals_sent': False, 'terminal_contents_read': False}
 
 
