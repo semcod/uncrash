@@ -302,5 +302,60 @@ def test_applications_endpoint_accepts_empty_installed_inventory(monkeypatch):
     assert all(category['apps'] == [] for category in data['categories'].values())
 
 
+def test_native_list_snapshots_and_api_fallback(tmp_path, monkeypatch):
+    import hashlib
+    from fastapi.testclient import TestClient
+    from uncrash.api import native_list_snapshots, create_fastapi_app
+    from uncrash.store import Store
+
+    sid = '20261011T110000000000-aaaaaaaaaaaa'
+    s_dir = tmp_path / 'snapshots' / sid
+    s_dir.mkdir(parents=True)
+    manifest = {
+        'schema': 'uncrash.snapshot/v1',
+        'id': sid,
+        'created_at': '2026-10-11T11:00:00+00:00',
+        'profiles': [{'id': 'codex-sessions'}],
+        'session_hosts': {
+            'processes': [{'pid': 50, 'role': 'client', 'provider': 'codex', 'cwd': '/home/test', 'terminal': '/dev/pts/1'}]
+        },
+        'jetbrains': {
+            'open_projects': ['/home/test/project1'],
+            'closed_projects': ['/home/test/project2']
+        }
+    }
+    raw = json.dumps(manifest).encode()
+    (s_dir / 'manifest.json').write_bytes(raw)
+    (s_dir / 'manifest.sha256').write_text(hashlib.sha256(raw).hexdigest())
+
+    items = native_list_snapshots(tmp_path)
+    assert items is not None
+    assert len(items) == 1
+    assert items[0]['id'] == sid
+    assert items[0]['profiles'] == ['codex-sessions']
+    assert items[0]['terminal_tabs_count'] == 1
+    assert items[0]['gui_projects_count'] == 2
+
+    store = Store(tmp_path)
+    app = create_fastapi_app(store=store)
+    client = TestClient(app)
+
+    res = client.get('/api/v1/snapshots')
+    assert res.status_code == 200
+    assert res.json()['count'] == 1
+    assert res.json()['snapshots'][0]['id'] == sid
+
+    # Fallback when native worker is unavailable
+    monkeypatch.setattr('uncrash.api.find_native_worker', lambda *a, **kw: None)
+    monkeypatch.setattr('shutil.which', lambda *a, **kw: None)
+    assert native_list_snapshots(tmp_path) is None
+
+    res_fallback = client.get('/api/v1/snapshots')
+    assert res_fallback.status_code == 200
+    assert res_fallback.json()['count'] == 1
+    assert res_fallback.json()['snapshots'][0]['id'] == sid
+
+
+
 
 

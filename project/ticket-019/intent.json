@@ -1,0 +1,26 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-019",
+  "summary": "Native Rust acceleration for snapshot manifest verification, health auditing, and session diagnostics",
+  "workstream": "application",
+  "classification": {
+    "kind": "SERVICE",
+    "priority": "P2",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-019/**",
+    "src/uncrash/snapshot.rs",
+    "src/uncrash/diagnostics.py",
+    "src/uncrash/api.py",
+    "tests/test_diagnostics.py",
+    "tests/test_api.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null
+}
