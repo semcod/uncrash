@@ -149,14 +149,13 @@ def export_bundle(store, snapshot, destination):
 class _BundleTarInfo(tarfile.TarInfo):
     """Validate raw headers before tarfile reads PAX, GNU or sparse metadata."""
 
-    @classmethod
-    def frombuf(cls, buf, encoding, errors):
-        member = super().frombuf(buf, encoding, errors)
-        if member.type not in (tarfile.REGTYPE, tarfile.AREGTYPE):
+    def _proc_member(self, archive):
+        # Both legacy and current CPython enter this hook before reading metadata.
+        if self.type not in (tarfile.REGTYPE, tarfile.AREGTYPE):
             raise RecoveryError('Only plain regular bundle archive members are supported')
-        if not 0 <= member.size <= MAX_FILE:
+        if not 0 <= self.size <= MAX_FILE:
             raise RecoveryError('Bundle archive member exceeds byte budget')
-        return member
+        return super()._proc_member(archive)
 
 
 def import_bundle(source, destination):
