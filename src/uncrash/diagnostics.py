@@ -27,7 +27,7 @@ HOSTS = {'gnome-terminal-server': 'GNOME Terminal', 'gnome-terminal-': 'GNOME Te
 
 
 def _stat(path):
-    fields = (path / 'stat').read_text().rsplit(')', 1)[1].split()
+    fields = _read_regular_bytes(path / 'stat', 65536).decode().rsplit(')', 1)[1].split()
     return {'pid': int(path.name), 'ppid': int(fields[1]), 'start_ticks': fields[19],
             'session_id': int(fields[3]), 'tty_nr': int(fields[4])}
 
@@ -41,6 +41,14 @@ def _read_regular_bytes(path, maximum):
     if len(raw) > maximum:
         raise ValueError('metadata limit exceeded')
     return raw
+
+
+def _read_regular_prefix(path, maximum):
+    fd = os.open(no_links(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError('metadata is not a regular file')
+        return stream.read(maximum)
 
 
 def _read_json(path, maximum=32 * 1024**2):
@@ -82,8 +90,8 @@ def session_hosts(proc_root=Path('/proc'), state_root=None):
         return native_data
     now = datetime.now(timezone.utc).isoformat()
     try:
-        boot = (proc_root / 'sys/kernel/random/boot_id').read_text().strip()
-    except OSError:
+        boot = _read_regular_bytes(proc_root / 'sys/kernel/random/boot_id', 65536).decode().strip()
+    except (OSError, ValueError, RecoveryError):
         boot = None
     nodes = {}; rejected = Counter()
     for path in proc_root.iterdir():
@@ -93,15 +101,14 @@ def session_hosts(proc_root=Path('/proc'), state_root=None):
             if path.stat().st_uid != os.getuid():
                 continue
             before = _stat(path)
-            name = (path / 'comm').read_text().strip()
+            name = _read_regular_bytes(path / 'comm', 65536).decode().strip()
             exe = os.readlink(path / 'exe')
             basename = Path(exe).name
             provider = basename if basename in PROVIDERS else None
             role = 'unknown'
             # Only recognize bounded executable arguments; never retain prompt arguments.
             if provider or basename in {'node', 'nodejs', 'java'}:
-                with (path / 'cmdline').open('rb') as stream:
-                    args = stream.read(65536).split(b'\0')
+                args = _read_regular_prefix(path / 'cmdline', 65536).split(b'\0')
                 if basename in {'node', 'nodejs'} and len(args) > 1:
                     entry = args[1].decode(errors='replace')
                     if '/@anthropic-ai/claude-code/' in entry: provider = 'claude'
@@ -121,8 +128,7 @@ def session_hosts(proc_root=Path('/proc'), state_root=None):
                 if node['terminal'] and node['role'] == 'unknown': node['role'] = 'client'
                 node['pid_namespace'] = os.readlink(path / 'ns/pid')
                 node['inherited_markers'] = {}
-                with (path / 'environ').open('rb') as stream:
-                    fields = stream.read(262144).split(b'\0')
+                fields = _read_regular_prefix(path / 'environ', 262144).split(b'\0')
                 for field in fields:
                     k, sep, v = field.partition(b'=')
                     if sep and k in {b'TERMINAL_EMULATOR', b'TERM_SESSION_ID'}:
@@ -130,7 +136,7 @@ def session_hosts(proc_root=Path('/proc'), state_root=None):
             if before != _stat(path):
                 rejected['identity_changed'] += 1; continue
             nodes[before['pid']] = node
-        except (OSError, ValueError, IndexError):
+        except (OSError, ValueError, IndexError, RecoveryError):
             rejected['unavailable'] += 1
     rows = []
     for pid in sorted(nodes):
@@ -148,7 +154,7 @@ def session_hosts(proc_root=Path('/proc'), state_root=None):
             try:
                 current = _stat(proc_root / str(member['pid']))
                 if any(current[k] != member[k] for k in ('pid', 'ppid', 'start_ticks')): stable = False
-            except (OSError, ValueError, IndexError): stable = False
+            except (OSError, ValueError, IndexError, RecoveryError): stable = False
         if not stable: host = None
         rows.append({k: v for k, v in node.items() if k != 'host_app'} | {
             'current_host': host or 'unknown', 'ancestry_stable': stable, 'ancestors': chain,
@@ -397,7 +403,10 @@ def provider_inventory(home, check_integrity=False, state_root=None):
         files = list((home / '.codex/sessions').rglob('*.jsonl'))
         for path in files:
             try:
-                with no_links(path).open('rb') as stream:
+                fd = os.open(no_links(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                with os.fdopen(fd, 'rb') as stream:
+                    if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                        raise ValueError('metadata is not a regular file')
                     raw = stream.readline(1024**2 + 1)
                 if len(raw) > 1024**2:
                     raise ValueError('oversized metadata')
@@ -411,7 +420,7 @@ def provider_inventory(home, check_integrity=False, state_root=None):
                 ids.append(sid)
                 label = meta.get('source')
                 labels[label if isinstance(label, str) else 'structured-source'] += 1
-            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, RecoveryError):
                 invalid += 1
         result['codex'] = {
             'files': len(files),

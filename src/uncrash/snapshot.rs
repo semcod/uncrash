@@ -613,6 +613,15 @@ fn read_regular(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     }
     Ok(bytes)
 }
+fn read_regular_prefix(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
+    let file = open(path, NONBLOCK)?;
+    if !file.metadata()?.is_file() {
+        return Err(fail());
+    }
+    let mut bytes = Vec::new();
+    file.take(limit).read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
 fn scan_panics(args: &[String]) -> io::Result<()> {
     if args.is_empty() {
         println!("[]");
@@ -2168,29 +2177,32 @@ fn run_list_snapshots(args: &[String]) -> io::Result<()> {
     }
 }
 
-fn collect_regular_files(dir: &Path, ext: &str, depth: usize, out: &mut Vec<PathBuf>) {
+fn collect_regular_files(dir: &Path, ext: &str, depth: usize, out: &mut Vec<PathBuf>) -> io::Result<()> {
     if depth == 0 {
-        return;
+        return Err(fail()); // Do not publish a silently truncated inventory.
     }
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
+    let guard = match open(dir, DIRECTORY) {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
     };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        let smeta = match fs::symlink_metadata(&p) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        if smeta.file_type().is_symlink() {
-            continue;
+    let anchored = PathBuf::from(format!("/proc/self/fd/{}", guard.as_raw_fd()));
+    for entry in fs::read_dir(&anchored)? {
+        let entry = entry?;
+        let p = dir.join(entry.file_name());
+        if p.to_str().is_none() {
+            return Err(fail());
         }
-        if smeta.is_dir() {
-            collect_regular_files(&p, ext, depth - 1, out);
-        } else if smeta.is_file() && p.extension().and_then(|s| s.to_str()) == Some(ext) {
-            out.push(p);
+        if p.extension().and_then(|s| s.to_str()) == Some(ext) {
+            // Python glob counts matching links/special files as candidates.
+            // The metadata reader rejects them without following or blocking.
+            out.push(p.clone());
+        }
+        if entry.file_type()?.is_dir() {
+            collect_regular_files(&p, ext, depth - 1, out)?;
         }
     }
+    Ok(())
 }
 
 fn read_first_line(path: &Path, max_len: usize) -> io::Result<Option<Vec<u8>>> {
@@ -2213,6 +2225,9 @@ fn read_first_line(path: &Path, max_len: usize) -> io::Result<Option<Vec<u8>>> {
             Err(e) => return Err(e),
         };
         if let Some(pos) = chunk[..n].iter().position(|&b| b == b'\n') {
+            if buf.len() + pos + 1 > max_len {
+                return Ok(None);
+            }
             buf.extend_from_slice(&chunk[..pos]);
             break;
         }
@@ -2248,14 +2263,8 @@ fn run_provider_inventory(args: &[String]) -> io::Result<()> {
     let claude_handle = thread::spawn(move || {
         let claude_root = home_claude.join(".claude/projects");
         let mut claude_files = Vec::new();
-        if let Ok(_guard) = open(&claude_root, DIRECTORY) {
-            if let Ok(meta) = fs::symlink_metadata(&claude_root) {
-                if !meta.file_type().is_symlink() && meta.is_dir() {
-                    collect_regular_files(&claude_root, "jsonl", 16, &mut claude_files);
-                }
-            }
-        }
-        claude_files.len()
+        collect_regular_files(&claude_root, "jsonl", 16, &mut claude_files)?;
+        Ok::<_, io::Error>(claude_files.len())
     });
 
     // 2. Antigravity DB files in background thread
@@ -2263,39 +2272,27 @@ fn run_provider_inventory(args: &[String]) -> io::Result<()> {
     let agy_handle = thread::spawn(move || {
         let agy_conv = home_agy.join(".gemini/antigravity-cli/conversations");
         let mut agy_db_stems = Vec::new();
-        if let Ok(_guard) = open(&agy_conv, DIRECTORY) {
-            if let Ok(meta) = fs::symlink_metadata(&agy_conv) {
-                if !meta.file_type().is_symlink() && meta.is_dir() {
-                    if let Ok(entries) = fs::read_dir(&agy_conv) {
-                        for entry in entries.flatten() {
-                            let p = entry.path();
-                            if let Ok(smeta) = fs::symlink_metadata(&p) {
-                                if !smeta.file_type().is_symlink() && smeta.is_file() {
-                                    if p.extension().and_then(|s| s.to_str()) == Some("db") {
-                                        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                                            agy_db_stems.push(stem.to_string());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+        let guard = match open(&agy_conv, DIRECTORY) {
+            Ok(g) => Some(g),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
+        if let Some(guard) = guard {
+            let anchored = format!("/proc/self/fd/{}", guard.as_raw_fd());
+            for entry in fs::read_dir(anchored)? {
+                let p = agy_conv.join(entry?.file_name());
+                if p.extension().and_then(|s| s.to_str()) == Some("db") {
+                    agy_db_stems.push(p.file_stem().and_then(|s| s.to_str()).ok_or_else(fail)?.to_string());
                 }
             }
         }
-        agy_db_stems
+        Ok::<_, io::Error>(agy_db_stems)
     });
 
     // 3. Codex sessions scan
     let codex_root = home_arc.join(".codex/sessions");
     let mut codex_files: Vec<PathBuf> = Vec::new();
-    if let Ok(_guard) = open(&codex_root, DIRECTORY) {
-        if let Ok(meta) = fs::symlink_metadata(&codex_root) {
-            if !meta.file_type().is_symlink() && meta.is_dir() {
-                collect_regular_files(&codex_root, "jsonl", 16, &mut codex_files);
-            }
-        }
-    }
+    collect_regular_files(&codex_root, "jsonl", 16, &mut codex_files)?;
 
     let num_threads = 4.min(codex_files.len().max(1));
     let chunk_size = codex_files.len().div_ceil(num_threads).max(1);
@@ -2323,16 +2320,19 @@ fn run_provider_inventory(args: &[String]) -> io::Result<()> {
                         continue;
                     }
                 };
+                // Python json.loads(bytes) supports more encodings than this
+                // parser. Let Python decide rather than flagging valid sessions.
+                if line_bytes.starts_with(b"\xef\xbb\xbf") || line_bytes.contains(&0) {
+                    return Err(fail());
+                }
                 let line_str = match std::str::from_utf8(&line_bytes) {
                     Ok(s) => s,
-                    Err(_) => {
-                        invalid += 1;
-                        continue;
-                    }
+                    Err(_) => return Err(fail()),
                 };
                 let mut parser = JsonParser::new(line_str);
                 let val = match parser.parse_json() {
                     Some(v) => v,
+                    None if parser.unsupported => return Err(fail()),
                     None => {
                         invalid += 1;
                         continue;
@@ -2364,7 +2364,7 @@ fn run_provider_inventory(args: &[String]) -> io::Result<()> {
                 };
                 *labels.entry(label).or_insert(0usize) += 1;
             }
-            (records, ids, invalid, labels)
+            Ok((records, ids, invalid, labels))
         }));
     }
 
@@ -2374,18 +2374,17 @@ fn run_provider_inventory(args: &[String]) -> io::Result<()> {
     let mut source_labels: HashMap<String, usize> = HashMap::new();
 
     for h in worker_handles {
-        if let Ok((recs, ids, inv, lbls)) = h.join() {
-            metadata_records += recs;
-            unique_ids.extend(ids);
-            invalid_metadata += inv;
-            for (k, v) in lbls {
-                *source_labels.entry(k).or_insert(0usize) += v;
-            }
+        let (recs, ids, inv, lbls) = h.join().map_err(|_| fail())??;
+        metadata_records += recs;
+        unique_ids.extend(ids);
+        invalid_metadata += inv;
+        for (k, v) in lbls {
+            *source_labels.entry(k).or_insert(0usize) += v;
         }
     }
 
-    let claude_files_count = claude_handle.join().map_err(|_| fail())?;
-    let mut agy_db_stems = agy_handle.join().map_err(|_| fail())?;
+    let claude_files_count = claude_handle.join().map_err(|_| fail())??;
+    let mut agy_db_stems = agy_handle.join().map_err(|_| fail())??;
 
     let mut labels_vec: Vec<(&String, &usize)> = source_labels.iter().collect();
     labels_vec.sort_by_key(|(k, _)| *k);
@@ -2451,7 +2450,7 @@ struct StatInfo {
 
 fn read_stat_file(proc_root: &Path, pid_str: &str) -> Option<StatInfo> {
     let p = proc_root.join(pid_str);
-    let raw = fs::read_to_string(p.join("stat")).ok()?;
+    let raw = String::from_utf8(read_regular(&p.join("stat"), 65536).ok()?).ok()?;
     let rparen = raw.rfind(')')?;
     let rest = &raw[rparen + 1..];
     let fields: Vec<&str> = rest.split_whitespace().collect();
@@ -2503,8 +2502,9 @@ fn run_session_hosts(args: &[String]) -> io::Result<()> {
         Err(_) => return Err(fail()),
     };
 
-    let boot_id = fs::read_to_string(proc_root.join("sys/kernel/random/boot_id"))
+    let boot_id = read_regular(&proc_root.join("sys/kernel/random/boot_id"), 65536)
         .ok()
+        .and_then(|b| String::from_utf8(b).ok())
         .map(|s| s.trim().to_string());
 
     let my_uid = unsafe { getuid() };
@@ -2535,7 +2535,8 @@ fn run_session_hosts(args: &[String]) -> io::Result<()> {
                 continue;
             }
         };
-        let comm_name = match fs::read_to_string(p.join("comm")) {
+        let comm_name = match read_regular(&p.join("comm"), 65536)
+            .and_then(|b| String::from_utf8(b).map_err(|_| fail())) {
             Ok(s) => s.trim().to_string(),
             Err(_) => {
                 rejected_unavailable += 1;
@@ -2564,7 +2565,7 @@ fn run_session_hosts(args: &[String]) -> io::Result<()> {
         let mut effective_basename = basename.clone();
 
         if provider.is_some() || basename == "node" || basename == "nodejs" || basename == "java" {
-            let cmdline_bytes = match fs::read(p.join("cmdline")) {
+            let cmdline_bytes = match read_regular_prefix(&p.join("cmdline"), 65536) {
                 Ok(b) => b,
                 Err(_) => {
                     rejected_unavailable += 1;
@@ -2659,7 +2660,7 @@ fn run_session_hosts(args: &[String]) -> io::Result<()> {
             };
             pid_namespace = Some(ns_path);
 
-            let env_bytes = match fs::read(p.join("environ")) {
+            let env_bytes = match read_regular_prefix(&p.join("environ"), 262144) {
                 Ok(b) => b,
                 Err(_) => {
                     rejected_unavailable += 1;

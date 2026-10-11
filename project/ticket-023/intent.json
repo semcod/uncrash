@@ -1,0 +1,102 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-023",
+  "summary": "Fix native diagnostic metadata parity and bounded proc reads",
+  "workstream": "application",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-023/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/diagnostics.py",
+    "src/uncrash/snapshot.rs",
+    "tests/test_diagnostics.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [
+    "ticket-021",
+    "ticket-022"
+  ],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "2d82ec367845db10774eb7c1645e0fb8d67bea60",
+    "targetBranch": "main",
+    "outcome": "Repair reproduced provider metadata decoding/line-limit parity and prevent blocking or unbounded session process reads; publish through exact-head independent validation.",
+    "nonGoals": [
+      "No user IDE signals, restarts or session database repairs",
+      "No protected CI/profile/policy changes or dependency additions"
+    ],
+    "complexity": "M",
+    "estimatedMinutes": 75,
+    "budgets": {
+      "maxImplementationFiles": 3,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Retain native acceleration for supported metadata, send unsupported JSON encodings/forms to Python, match first-line byte budget including newline, reject unsafe/nonregular metadata and bound all process reads in both paths.",
+      "components": [
+        {
+          "name": "native-diagnostics",
+          "paths": [
+            "src/uncrash/diagnostics.py",
+            "src/uncrash/snapshot.rs",
+            "tests/test_diagnostics.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Protected revert of this bounded remediation; retain previous installed CLI release."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "python -m pytest tests/test_diagnostics.py -q"
+        ],
+        "evidence": "Provider BOM/UTF16/unsupported JSON uses correct Python fallback; exact line budget parity."
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "python -m pytest tests/test_diagnostics.py -q"
+        ],
+        "evidence": "Process metadata FIFO, symlink and oversize reads refuse promptly in worker and Python fallback."
+      },
+      {
+        "criterion": "AC-03",
+        "commands": [
+          "python -m pytest tests/test_diagnostics.py -q"
+        ],
+        "evidence": "Normal provider/process output and privacy remain unchanged; no compiler on cold queries."
+      },
+      {
+        "criterion": "AC-04",
+        "commands": [
+          "python -m pytest -q",
+          "./project/governance-check.sh --base 2d82ec367845db10774eb7c1645e0fb8d67bea60",
+          "protected OneDev and independent Validator"
+        ],
+        "evidence": "Full mandatory X11 and governance/product checks plus protected publication."
+      }
+    ]
+  }
+}
