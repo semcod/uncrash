@@ -912,3 +912,53 @@ def test_native_provider_inventory_refuses_symlink_home(tmp_path, monkeypatch, o
     monkeypatch.setattr(d, 'find_native_worker', lambda *a, **k: owned_diagnostics_worker)
     assert d.native_provider_inventory(symlink_home) is None
 
+
+def test_session_hosts_native_parity_and_fallback(tmp_path, monkeypatch, owned_diagnostics_worker):
+    (tmp_path / 'sys/kernel/random').mkdir(parents=True)
+    (tmp_path / 'sys/kernel/random/boot_id').write_text('boot-12345\n')
+
+    process(tmp_path, 10, 1, 'pycharm', '/apps/pycharm', 10)
+    process(tmp_path, 11, 10, 'bash', '/bin/bash', 11)
+    process(tmp_path, 12, 11, 'codex', '/bin/codex', 12)
+    process(tmp_path, 20, 1, 'gnome-terminal-', '/bin/gnome-terminal-server', 20)
+    process(tmp_path, 21, 20, 'agy', '/bin/agy', 21)
+    process(tmp_path, 30, 1, 'codex', '/bin/codex', 30, '/dev/null', b'TERMINAL_EMULATOR=JetBrains-JediTerm\0TOKEN=do-not-record\0')
+
+    p_node = process(tmp_path, 40, 1, 'node', '/usr/bin/node', 40)
+    (p_node / 'cmdline').write_bytes(b'/usr/bin/node\0/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js\0app-server\0')
+
+    p_java = process(tmp_path, 50, 1, 'java', '/usr/bin/java', 50)
+    (p_java / 'cmdline').write_bytes(b'/usr/bin/java\0-Didea.paths.selector=IdeaIC2023.2\0')
+    process(tmp_path, 51, 50, 'codex', '/usr/bin/codex', 51)
+
+    # 1. Native execution
+    monkeypatch.setattr(d, 'find_native_worker', lambda *a, **k: owned_diagnostics_worker)
+    native_res = d.session_hosts(tmp_path)
+
+    # 2. Pure Python fallback
+    with monkeypatch.context() as pure:
+        pure.setattr(d, 'native_session_hosts', lambda *a, **k: None)
+        py_res = d.session_hosts(tmp_path)
+
+    assert native_res['schema'] == py_res['schema']
+    assert native_res['boot_id'] == py_res['boot_id']
+    assert native_res['limitations'] == py_res['limitations']
+    assert native_res['rejected_observations'] == py_res['rejected_observations']
+    assert native_res['processes'] == py_res['processes']
+
+
+def test_native_session_hosts_refuses_symlink_proc(tmp_path, monkeypatch, owned_diagnostics_worker):
+    real_proc = tmp_path / 'real_proc'
+    real_proc.mkdir()
+    symlink_proc = tmp_path / 'symlink_proc'
+    symlink_proc.symlink_to(real_proc)
+
+    monkeypatch.setattr(d, 'find_native_worker', lambda *a, **k: owned_diagnostics_worker)
+    assert d.native_session_hosts(symlink_proc) is None
+
+
+def test_native_session_hosts_returns_none_when_no_worker(tmp_path, monkeypatch):
+    monkeypatch.setattr(d, 'find_native_worker', lambda *a, **k: None)
+    assert d.native_session_hosts(tmp_path) is None
+
+
