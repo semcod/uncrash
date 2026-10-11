@@ -29,4 +29,5 @@
 | **ticket-025** | [`README.md`](./ticket-025/README.md) | - | - | - | - | - |
 | **ticket-026** | [`README.md`](./ticket-026/README.md) | - | - | - | - | - |
 | **ticket-027** | [`README.md`](./ticket-027/README.md) | - | - | - | - | - |
+| **ticket-028** | [`README.md`](./ticket-028/README.md) | - | - |  [`ai-gemini.md`](./ticket-028/ai-gemini.md) | - | - |
 <!-- AUTO:TICKET_INDEX:END -->
