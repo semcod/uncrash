@@ -962,3 +962,126 @@ def test_native_session_hosts_returns_none_when_no_worker(tmp_path, monkeypatch)
     assert d.native_session_hosts(tmp_path) is None
 
 
+@pytest.mark.parametrize('encoding', ['bom', 'utf16', 'utf32', 'nan', 'surrogate', 'deep', 'large-integer'])
+def test_native_provider_metadata_unsupported_forms_use_python(tmp_path, monkeypatch, owned_diagnostics_worker, encoding):
+    record = {'type': 'session_meta', 'payload': {'id': 'session', 'source': 'terminal'}}
+    if encoding == 'nan':
+        record['extra'] = float('nan')
+    elif encoding == 'surrogate':
+        record['extra'] = '\ud800'
+    elif encoding == 'deep':
+        value = 1
+        for _ in range(140):
+            value = [value]
+        record['extra'] = value
+    elif encoding == 'large-integer':
+        record['extra'] = 10 ** 200
+    raw = json.dumps(record).encode()
+    if encoding == 'bom':
+        raw = b'\xef\xbb\xbf' + raw
+    elif encoding in {'utf16', 'utf32'}:
+        raw = json.dumps(record).encode('utf-16' if encoding == 'utf16' else 'utf-32')
+    folder = tmp_path / '.codex/sessions'
+    folder.mkdir(parents=True)
+    (folder / 'one.jsonl').write_bytes(raw)
+    monkeypatch.setattr(d, 'find_native_worker', lambda *a, **k: owned_diagnostics_worker)
+    if encoding != 'large-integer':
+        assert d.native_provider_inventory(tmp_path) is None
+    result = d.provider_inventory(tmp_path)
+    with monkeypatch.context() as pure:
+        pure.setattr(d, 'native_provider_inventory', lambda *a, **k: None)
+        assert result == d.provider_inventory(tmp_path)
+    assert result['codex']['metadata_records'] == 1
+
+
+@pytest.mark.parametrize('newline,padding_delta,valid', [(False, 0, True), (True, -1, True), (True, 0, False), (False, 1, False)])
+def test_provider_first_line_budget_includes_newline(tmp_path, monkeypatch, owned_diagnostics_worker, newline, padding_delta, valid):
+    raw = json.dumps({'type': 'session_meta', 'payload': {'id': 'session'}}).encode()
+    folder = tmp_path / '.codex/sessions'
+    folder.mkdir(parents=True)
+    (folder / 'one.jsonl').write_bytes(raw + b' ' * (1024**2 - len(raw) + padding_delta) + (b'\n' if newline else b''))
+    monkeypatch.setattr(d, 'find_native_worker', lambda *a, **k: owned_diagnostics_worker)
+    result = d.provider_inventory(tmp_path)
+    with monkeypatch.context() as pure:
+        pure.setattr(d, 'native_provider_inventory', lambda *a, **k: None)
+        assert result == d.provider_inventory(tmp_path)
+    assert result['codex']['metadata_records'] == int(valid)
+
+
+def _bounded_fixture_diagnostic(root, worker, operation, native):
+    """An unsafe implementation must time out only its owned fixture child."""
+    import subprocess
+    import sys
+    code = '''import json,sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from uncrash import diagnostics as d
+d.find_native_worker = lambda *a, **k: Path(sys.argv[3]) if sys.argv[5] == 'native' else None
+print(json.dumps(getattr(d, sys.argv[4])(Path(sys.argv[2]))))
+'''
+    result = subprocess.run([sys.executable, '-I', '-c', code, str(Path(d.__file__).parent.parent), str(root), str(worker), operation, 'native' if native else 'python'],
+                            capture_output=True, text=True, timeout=3, check=True)
+    return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize('field', ['boot_id', 'stat', 'comm', 'cmdline', 'environ'])
+@pytest.mark.parametrize('kind', ['fifo', 'symlink'])
+def test_session_metadata_refuses_blocking_or_linked_files(tmp_path, owned_diagnostics_worker, field, kind):
+    p = process(tmp_path, 12, 1, 'codex', '/bin/codex', 12)
+    if field == 'boot_id':
+        path = tmp_path / 'sys/kernel/random/boot_id'
+        path.parent.mkdir(parents=True)
+        path.write_text('boot\n')
+    else:
+        path = p / field
+    original = path.read_bytes()
+    path.unlink()
+    if kind == 'fifo':
+        os.mkfifo(path)
+    else:
+        target = tmp_path / 'private-metadata'
+        target.write_bytes(original)
+        path.symlink_to(target)
+    native = _bounded_fixture_diagnostic(tmp_path, owned_diagnostics_worker, 'session_hosts', True)
+    python = _bounded_fixture_diagnostic(tmp_path, owned_diagnostics_worker, 'session_hosts', False)
+    native.pop('observed_at'); python.pop('observed_at')
+    assert native == python
+    if field != 'boot_id':
+        assert native['processes'] == []
+
+
+@pytest.mark.parametrize('field', ['stat', 'comm', 'boot_id'])
+def test_session_metadata_has_bounded_reads(tmp_path, owned_diagnostics_worker, field):
+    p = process(tmp_path, 12, 1, 'codex', '/bin/codex', 12)
+    path = p / field if field != 'boot_id' else tmp_path / 'sys/kernel/random/boot_id'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b'x' * 65537)
+    native = _bounded_fixture_diagnostic(tmp_path, owned_diagnostics_worker, 'session_hosts', True)
+    python = _bounded_fixture_diagnostic(tmp_path, owned_diagnostics_worker, 'session_hosts', False)
+    native.pop('observed_at'); python.pop('observed_at')
+    assert native == python
+
+
+@pytest.mark.parametrize('kind', ['fifo', 'symlink', 'deep-directory'])
+def test_provider_inventory_unsafe_candidates_match_fallback(tmp_path, owned_diagnostics_worker, kind):
+    folder = tmp_path / '.codex/sessions'
+    if kind == 'deep-directory':
+        folder = folder.joinpath(*['nested'] * 18)
+    folder.mkdir(parents=True)
+    path = folder / 'one.jsonl'
+    raw = json.dumps({'type': 'session_meta', 'payload': {'id': 'session'}}).encode()
+    if kind == 'fifo':
+        os.mkfifo(path)
+    elif kind == 'symlink':
+        target = tmp_path / 'metadata'
+        target.write_bytes(raw)
+        path.symlink_to(target)
+    else:
+        path.write_bytes(raw)
+    native = _bounded_fixture_diagnostic(tmp_path, owned_diagnostics_worker, 'provider_inventory', True)
+    python = _bounded_fixture_diagnostic(tmp_path, owned_diagnostics_worker, 'provider_inventory', False)
+    assert native == python
+    assert native['codex']['files'] == 1
+    assert native['codex']['invalid_metadata'] == (0 if kind == 'deep-directory' else 1)
+
+
