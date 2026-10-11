@@ -1,0 +1,102 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-027",
+  "summary": "Render snapshot dashboard data as inert text and bind action callbacks without interpolated JavaScript",
+  "workstream": "application",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "requested"
+  },
+  "allowedPaths": [
+    "project/ticket-027/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/web_ui.py",
+    "tests/test_web_ui.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "4b3068ece8ebcad55f633d6134fcc8db5ad2a4fc",
+    "targetBranch": "main",
+    "outcome": "Fix stored HTML/JavaScript injection and Unicode script copying in PLF004 snapshot lists/details; verify through Willman and publish through protected OneDev/Validator",
+    "nonGoals": [
+      "Other dashboard panels, dependencies, protected CI, deployment, real IDE/agent launches and wider PLF002/004 integration are outside this bounded change."
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 30,
+    "budgets": {
+      "maxImplementationFiles": 2,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Escape all snapshot list/detail text; allowlist provider CSS classes; bind snapshot buttons and script copying through closures rather than inline interpolated data. Execute the real dashboard JavaScript in the existing Node test runtime and inspect generated HTML and callbacks.",
+      "components": [
+        {
+          "name": "snapshot dashboard",
+          "paths": [
+            "src/uncrash/web_ui.py",
+            "tests/test_web_ui.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "multi-state",
+        "states": [
+          "loading",
+          "empty",
+          "error",
+          "success"
+        ],
+        "evidence": [
+          "executable regression tests preserve displayed text and exact action arguments"
+        ]
+      },
+      "rollback": "Protected revert of implementation; no stored-data migration."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "python -m pytest tests/test_web_ui.py -q"
+        ],
+        "evidence": "Execute dashboard JavaScript with injected tags, quotes and Unicode; inspect generated HTML, callback arguments, copy text and errors."
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "python -m pytest tests/test_web_ui.py tests/test_api.py tests/test_recovery.py -q"
+        ],
+        "evidence": "Normal snapshot text, provider labels and action callbacks preserve existing behavior without real launches."
+      },
+      {
+        "criterion": "AC-03",
+        "commands": [
+          "python -m pytest tests -q",
+          "./project/governance-check.sh"
+        ],
+        "evidence": "Full source suite and mandatory four-window X11 pass via Willman; governed scope and hosts pass."
+      },
+      {
+        "criterion": "AC-04",
+        "commands": [
+          "protected exact-head OneDev and independent Validator"
+        ],
+        "evidence": "Trusted review and protected merge bind frozen repository/PR/HEAD/ticket."
+      }
+    ]
+  }
+}
