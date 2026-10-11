@@ -306,14 +306,19 @@ def test_native_list_snapshots_and_api_fallback(tmp_path, monkeypatch):
     import hashlib
     from fastapi.testclient import TestClient
     from uncrash.api import native_list_snapshots, create_fastapi_app
-    from uncrash.store import Store
+    from uncrash.store import Store, build_native
 
+    store = Store(tmp_path)
+    worker = build_native(tmp_path / "owned-worker")
+    monkeypatch.setattr("uncrash.api.find_native_worker", lambda *a, **k: worker)
     sid = '20261011T110000000000-aaaaaaaaaaaa'
     s_dir = tmp_path / 'snapshots' / sid
     s_dir.mkdir(parents=True)
     manifest = {
         'schema': 'uncrash.snapshot/v1',
         'id': sid,
+        'origin': store.origin,
+        'encryption': 'none',
         'created_at': '2026-10-11T11:00:00+00:00',
         'profiles': [{'id': 'codex-sessions'}],
         'session_hosts': {
@@ -353,9 +358,71 @@ def test_native_list_snapshots_and_api_fallback(tmp_path, monkeypatch):
     res_fallback = client.get('/api/v1/snapshots')
     assert res_fallback.status_code == 200
     assert res_fallback.json()['count'] == 1
-    assert res_fallback.json()['snapshots'][0]['id'] == sid
+    assert res_fallback.json() == res.json()
 
 
 
 
 
+
+@pytest.mark.parametrize('defect', ['origin', 'schema', 'encryption', 'identity', 'checksum-link'])
+def test_native_listing_preserves_store_refusal(tmp_path, monkeypatch, defect):
+    import hashlib
+    from fastapi.testclient import TestClient
+    from uncrash import api
+    from uncrash.store import Store, build_native
+    store = Store(tmp_path, origin='fixture-origin')
+    worker = build_native(tmp_path / 'worker')
+    monkeypatch.setattr(api, 'find_native_worker', lambda *a, **k: worker)
+    sid = '20261011T130000000000-012345abcdef'
+    p = store.snapshots / sid
+    p.mkdir()
+    manifest = {'schema': 'uncrash.snapshot/v1', 'id': sid, 'origin': store.origin,
+                'encryption': 'none', 'profiles': [], 'created_at': '2026-10-11T13:00:00+00:00'}
+    if defect == 'identity':
+        manifest['id'] = 'wrong-id'
+    elif defect != 'checksum-link':
+        manifest[defect] = 'invalid-value'
+    raw = json.dumps(manifest).encode()
+    (p / 'manifest.json').write_bytes(raw)
+    (p / 'manifest.sha256').write_text(hashlib.sha256(raw).hexdigest())
+    if defect == 'checksum-link':
+        outside = tmp_path / 'outside.sha256'
+        outside.write_text(hashlib.sha256(raw).hexdigest())
+        (p / 'manifest.sha256').unlink()
+        (p / 'manifest.sha256').symlink_to(outside)
+    client = TestClient(api.create_fastapi_app(store=store))
+    with monkeypatch.context() as pure:
+        pure.setattr(api, 'native_list_snapshots', lambda *a, **k: None)
+        expected = client.get('/api/v1/snapshots').json()
+    assert expected['snapshots'] == [{'id': sid, 'error': 'unreadable'}]
+    assert client.get('/api/v1/snapshots').json() == expected
+
+
+def test_cold_listing_never_compiles(tmp_path, monkeypatch):
+    from uncrash import api
+    monkeypatch.setattr(api, 'find_native_worker', lambda *a, **k: None)
+    monkeypatch.setattr(api.subprocess, 'run', lambda *a, **k: pytest.fail('Cold listing started a compiler'))
+    assert api.native_list_snapshots(tmp_path) is None
+
+
+def test_native_listing_keeps_authenticated_encrypted_fallback(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from uncrash import api
+    from uncrash.store import Store, build_native
+    store = Store(tmp_path / 'store')
+    source = tmp_path / 'source'
+    source.mkdir()
+    (source / 'fixture.txt').write_text('owned fixture')
+    config = {'encrypt': True, 'snapshot_engine': 'python', 'profiles': [
+        {'id': 'fixture', 'state_dir': str(source), 'include': ['*.txt']}]}
+    sid = store.capture(config)['snapshot']
+    worker = build_native(tmp_path / 'worker')
+    monkeypatch.setattr(api, 'find_native_worker', lambda *a, **k: worker)
+    assert api.native_list_snapshots(store.root, store.origin) is None
+    client = TestClient(api.create_fastapi_app(store=store))
+    with monkeypatch.context() as pure:
+        pure.setattr(api, 'native_list_snapshots', lambda *a, **k: None)
+        expected = client.get('/api/v1/snapshots').json()
+    assert client.get('/api/v1/snapshots').json() == expected
+    assert expected['snapshots'][0]['id'] == sid and 'error' not in expected['snapshots'][0]

@@ -501,7 +501,8 @@ def test_panic_scan_rejects_invalid_file_budgets(tmp_path):
             d.scan_agent_log_panics(tmp_path, budget)
 
 
-def test_native_scan_agent_log_panics_matches_python_results(tmp_path):
+def test_native_scan_agent_log_panics_matches_python_results(tmp_path, monkeypatch, owned_diagnostics_worker):
+    monkeypatch.setattr(d, 'find_native_worker', lambda *a, **k: owned_diagnostics_worker)
     log1 = tmp_path / 'session_1.log'
     log1.write_text(
         "I1011 10:00:00 server.go:100 start\n"
@@ -523,7 +524,9 @@ def test_native_scan_agent_log_panics_matches_python_results(tmp_path):
     assert native_res is not None
     assert len(native_res) == 3
 
-    combined_res = d.scan_agent_log_panics(tmp_path, max_files=10)
+    with monkeypatch.context() as fallback:
+        fallback.setattr(d, 'native_scan_agent_log_panics', lambda *a, **k: None)
+        combined_res = d.scan_agent_log_panics(tmp_path, max_files=10)
     assert combined_res == native_res
 
     signatures = {r['signature'] for r in native_res}
@@ -553,11 +556,12 @@ def test_find_native_worker_discovery(tmp_path):
     assert found == built
 
 
-def test_native_snapshot_health_matches_python_parity(tmp_path, monkeypatch):
+def test_native_snapshot_health_matches_python_parity(tmp_path, monkeypatch, owned_diagnostics_worker):
     from datetime import datetime, timezone
     import hashlib
     now = datetime(2026, 10, 11, 12, 0, 0, tzinfo=timezone.utc)
 
+    monkeypatch.setattr(d, 'find_native_worker', lambda *a, **k: owned_diagnostics_worker)
     # 1. Valid snapshot with jetbrains provider process
     s1_id = '20261011T100000000000-aaaaaaaaaaaa'
     s1_dir = tmp_path / 'snapshots' / s1_id
@@ -611,6 +615,7 @@ def test_native_snapshot_health_matches_python_parity(tmp_path, monkeypatch):
     monkeypatch.setattr(d, 'native_snapshot_health', lambda *a, **kw: None)
     py_res = d.snapshot_health(tmp_path, interval=300, now=now)
 
+    assert native_res == py_res
     assert native_res['verified_plain_manifests'] == py_res['verified_plain_manifests'] == 1
     assert native_res['invalid_manifests'] == py_res['invalid_manifests'] == 2
     assert native_res['latest_snapshot'] == py_res['latest_snapshot'] == s1_id
@@ -642,3 +647,164 @@ def test_native_snapshot_health_fallback(tmp_path, monkeypatch):
 
 
 
+
+@pytest.fixture(scope='module')
+def owned_diagnostics_worker(tmp_path_factory):
+    from uncrash.store import build_native
+    return build_native(tmp_path_factory.mktemp('diagnostic-worker'))
+
+
+@pytest.mark.parametrize('content', [
+    'Caught panic:\nnext-line detail\n',
+    'runtime error:\ninvalid memory address or nil pointer dereference detail\n',
+    'program was killed:\nprogram experienced a panic detail\n',
+    'Failed to load conversation abc-123:\ndatabase disk image is malformed\n',
+    'Failed to load conversation abc-123 : database disk image is malformed\n',
+    'runtime error: benign; runtime error: invalid memory address or nil pointer dereference\n',
+    'Caught panic: first\rsecond\n',
+    'Caught panic:\x1cdetail\n',
+    'Caught panİc: Unicode case folding\n',
+])
+def test_native_panic_scan_matches_forced_python(tmp_path, monkeypatch, owned_diagnostics_worker, content):
+    (tmp_path / 'fixture.log').write_text(content)
+    monkeypatch.setattr(d, 'find_native_worker', lambda *a, **k: owned_diagnostics_worker)
+    with monkeypatch.context() as pure:
+        pure.setattr(d, 'native_scan_agent_log_panics', lambda *a, **k: None)
+        expected = d.scan_agent_log_panics(tmp_path)
+    if not content.isascii():
+        assert d.native_scan_agent_log_panics(tmp_path) is None
+    else:
+        assert d.native_scan_agent_log_panics(tmp_path) == expected
+    assert d.scan_agent_log_panics(tmp_path) == expected
+
+
+def test_native_panic_scan_rejects_symlink_ancestor(tmp_path, monkeypatch, owned_diagnostics_worker):
+    import subprocess
+    private = tmp_path / 'private'
+    logs = private / 'logs'
+    logs.mkdir(parents=True)
+    (logs / 'fixture.log').write_text('Caught panic: PRIVATE_FIXTURE\n')
+    alias = tmp_path / 'alias'
+    alias.symlink_to(private, target_is_directory=True)
+    monkeypatch.setattr(d, 'find_native_worker', lambda *a, **k: owned_diagnostics_worker)
+    assert d.scan_agent_log_panics(alias / 'logs') == []
+    result = subprocess.run([str(owned_diagnostics_worker), '--scan-panics', str(alias / 'logs')],
+                            capture_output=True, text=True, check=True, timeout=3)
+    assert json.loads(result.stdout) == []
+
+
+@pytest.mark.parametrize('case', [
+    'trailing-json', 'malformed-ignored-array', 'duplicate-id', 'invalid-date',
+    'upper-checksum', 'linked-checksum', 'linked-snapshot', 'missing-state',
+    'empty-state', 'only-encrypted', 'lone-surrogate', 'deep-ignored-field',
+    'bad-number', 'control-character', 'nan-extension', 'infinity-extension', 'negative-infinity',
+    'surrogate-pair', 'large-integer', 'single-bom', 'double-bom',
+])
+def test_native_snapshot_refusal_matches_python(tmp_path, monkeypatch, owned_diagnostics_worker, case):
+    now = d.datetime(2026, 10, 11, 14, tzinfo=d.timezone.utc)
+    p = tmp_path / 'snapshots/fixture'
+    p.mkdir(parents=True)
+    manifest = {'schema': 'uncrash.snapshot/v1', 'id': 'fixture',
+                'created_at': '2026-10-11T13:00:00+00:00', 'jetbrains': {}}
+    if case == 'invalid-date':
+        manifest['created_at'] = '2026-02-31T00:00:00+00:00'
+    raw = json.dumps(manifest).encode()
+    if case in ('single-bom', 'double-bom'):
+        raw = b'\xef\xbb\xbf' * (1 if case == 'single-bom' else 2) + raw
+    elif case == 'trailing-json':
+        raw += b' trailing-garbage'
+    elif case == 'malformed-ignored-array':
+        raw = raw[:-1] + b', "ignored": [1,,2]}'
+    elif case == 'duplicate-id':
+        raw = raw[:-1] + b', "id": "wrong-id"}'
+    elif case == 'lone-surrogate':
+        raw = raw[:-1] + b', "ignored": "\\ud800"}'
+    elif case == 'bad-number':
+        raw = raw[:-1] + b', "ignored": [01]}'
+    elif case == 'control-character':
+        raw = raw[:-1] + b', "ignored": "raw\x01control"}'
+    elif case in ('nan-extension', 'infinity-extension', 'negative-infinity'):
+        token = {'nan-extension': b'NaN', 'infinity-extension': b'Infinity', 'negative-infinity': b'-Infinity'}[case]
+        raw = raw[:-1] + b', "ignored": ' + token + b'}'
+    elif case == 'surrogate-pair':
+        raw = raw[:-1] + b', "ignored": "\\ud83d\\ude00"}'
+    elif case == 'large-integer':
+        raw = raw[:-1] + b', "ignored": ' + b'1' * 4500 + b'}'
+    elif case == 'deep-ignored-field':
+        raw = raw[:-1] + b', "ignored":' + b'[' * 140 + b'0' + b']' * 140 + b'}'
+    (p / 'manifest.json').write_bytes(raw)
+    sha = hashlib.sha256(raw).hexdigest()
+    (p / 'manifest.sha256').write_text(sha.upper() if case == 'upper-checksum' else sha)
+    if case == 'linked-checksum':
+        outside = tmp_path / 'outside.sha256'
+        outside.write_text(sha)
+        (p / 'manifest.sha256').unlink()
+        (p / 'manifest.sha256').symlink_to(outside)
+    elif case == 'linked-snapshot':
+        outside = tmp_path / 'outside'
+        p.rename(outside)
+        p.symlink_to(outside, target_is_directory=True)
+    elif case in ('missing-state', 'empty-state', 'only-encrypted'):
+        (p / 'manifest.json').unlink()
+        (p / 'manifest.sha256').unlink()
+        if case == 'missing-state':
+            tmp_path = tmp_path / 'absent'
+        elif case == 'only-encrypted':
+            (p / 'manifest.enc').write_bytes(b'opaque fixture')
+    monkeypatch.setattr(d, 'find_native_worker', lambda *a, **k: owned_diagnostics_worker)
+    with monkeypatch.context() as pure:
+        pure.setattr(d, 'native_snapshot_health', lambda *a, **k: None)
+        expected = d.snapshot_health(tmp_path, interval=7, now=now)
+    assert d.snapshot_health(tmp_path, interval=7, now=now) == expected
+
+
+def test_cold_diagnostics_never_compile(tmp_path, monkeypatch):
+    monkeypatch.setattr(d, 'find_native_worker', lambda *a, **k: None)
+    def forbidden(*a, **k):
+        pytest.fail('Cold diagnostics started a subprocess/compiler')
+    monkeypatch.setattr(d.subprocess, 'run', forbidden)
+    (tmp_path / 'fixture.log').write_text('Caught panic: cold-start detail\n')
+    assert d.scan_agent_log_panics(tmp_path)[0]['matched_detail'] == 'cold-start detail'
+    assert d.snapshot_health(tmp_path)['verified_plain_manifests'] == 0
+
+
+@pytest.mark.parametrize('name', ['manifest.json', 'manifest.sha256'])
+def test_metadata_fifo_does_not_block(tmp_path, monkeypatch, owned_diagnostics_worker, name):
+    import os
+    import subprocess
+    p = tmp_path / 'snapshots/fixture'
+    p.mkdir(parents=True)
+    raw = json.dumps({'schema': 'uncrash.snapshot/v1', 'id': 'fixture',
+                      'created_at': '2026-01-01T00:00:00+00:00'}).encode()
+    (p / 'manifest.json').write_bytes(raw)
+    (p / 'manifest.sha256').write_text(hashlib.sha256(raw).hexdigest())
+    (p / name).unlink()
+    os.mkfifo(p / name)
+    result = subprocess.run([str(owned_diagnostics_worker), '--snapshot-health', str(tmp_path), '300'],
+                            capture_output=True, text=True, check=True, timeout=3)
+    assert json.loads(result.stdout)['invalid_manifests'] == 1
+    monkeypatch.setattr(d, 'native_snapshot_health', lambda *a, **k: None)
+    assert d.snapshot_health(tmp_path)['invalid_manifests'] == 1
+
+
+def test_native_history_preserves_provider_order_and_intermediate_ancestors(tmp_path, monkeypatch, owned_diagnostics_worker):
+    now = d.datetime(2026, 10, 11, 14, tzinfo=d.timezone.utc)
+    for n in range(3):
+        sid = f'fixture-{n}'
+        p = tmp_path / 'snapshots' / sid
+        p.mkdir(parents=True)
+        rows = [{'pid': 150, 'ppid': 100, 'name': 'bash'}]
+        rows += [{'pid': pid, 'ppid': 150, 'name': name, 'start_ticks': str(pid), 'cwd': '/fixture'}
+                 for pid, name in [(301, 'codex'), (200, 'claude'), (250, 'agy')]]
+        raw = json.dumps({'schema': 'uncrash.snapshot/v1', 'id': sid, 'origin': 'fixture',
+                          'created_at': f'2026-10-11T13:0{n}:00+00:00',
+                          'jetbrains': {'processes': [{'pid': 100, 'root_ide_candidate': True}],
+                                        'descendants': rows}}).encode()
+        (p / 'manifest.json').write_bytes(raw)
+        (p / 'manifest.sha256').write_text(hashlib.sha256(raw).hexdigest())
+    monkeypatch.setattr(d, 'find_native_worker', lambda *a, **k: owned_diagnostics_worker)
+    with monkeypatch.context() as pure:
+        pure.setattr(d, 'native_snapshot_health', lambda *a, **k: None)
+        expected = d.snapshot_health(tmp_path, now=now)
+    assert [r['pid'] for r in expected['historical_ide_provider_observations']] == [301, 200, 250]
+    assert d.native_snapshot_health(tmp_path, now=now) == expected

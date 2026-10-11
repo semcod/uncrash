@@ -1,0 +1,113 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-020",
+  "summary": "Restore native diagnostics safety and Python parity",
+  "workstream": "application",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-020/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/api.py",
+    "src/uncrash/diagnostics.py",
+    "src/uncrash/snapshot.rs",
+    "tests/test_api.py",
+    "tests/test_diagnostics.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [
+    "ticket-018",
+    "ticket-019"
+  ],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "2db2b4161d1a10a86685a879a47ca779898f57b0",
+    "targetBranch": "main",
+    "outcome": "Repair reproduced native scanner and snapshot audit/listing refusal and parity regressions, preserve verified Python fallback and publish via protected independent validation. Avoid synchronous cold compilation during read-only diagnostics.",
+    "nonGoals": [
+      "No user IDE signals, restarts or session database repairs",
+      "No protected CI/profile/policy changes or dependency additions"
+    ],
+    "complexity": "M",
+    "estimatedMinutes": 90,
+    "budgets": {
+      "maxImplementationFiles": 5,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Retain worker acceleration for supported validated inputs; use anchored no-follow nonblocking reads, strict bounded JSON parsing and store identity checks. Unsupported encodings or encrypted listing use the existing Python fallback. Compilation remains explicit via existing build-native CLI.",
+      "components": [
+        {
+          "name": "native-diagnostics",
+          "paths": [
+            "src/uncrash/snapshot.rs",
+            "src/uncrash/diagnostics.py",
+            "src/uncrash/api.py",
+            "tests/test_diagnostics.py",
+            "tests/test_api.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Protected revert of this bounded remediation; retain previous installed CLI release."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "python -m pytest tests/test_diagnostics.py tests/test_api.py -q"
+        ],
+        "evidence": "Ancestor symlink rejection in direct worker and wrapper; nonblocking bounded file reads."
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "python -m pytest tests/test_diagnostics.py tests/test_api.py -q"
+        ],
+        "evidence": "Forced Python/native panic parity for multiline, repeated prefixes and supported ASCII; Unicode uses Python."
+      },
+      {
+        "criterion": "AC-03",
+        "commands": [
+          "python -m pytest tests/test_diagnostics.py tests/test_api.py -q"
+        ],
+        "evidence": "Malformed JSON/date/checksum/symlink refusal and deterministic snapshot health parity."
+      },
+      {
+        "criterion": "AC-04",
+        "commands": [
+          "python -m pytest tests/test_diagnostics.py tests/test_api.py -q"
+        ],
+        "evidence": "Store origin/schema/encryption identity and encrypted fallback; cold queries never invoke rustc."
+      },
+      {
+        "criterion": "AC-05",
+        "commands": [
+          "python -m pytest -q",
+          "./project/governance-check.sh --base 2db2b4161d1a10a86685a879a47ca779898f57b0",
+          "protected OneDev and independent Validator"
+        ],
+        "evidence": "Full mandatory X11 and product/governance checks; exact-head protected publication."
+      }
+    ]
+  }
+}
