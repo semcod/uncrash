@@ -649,6 +649,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
+    function escapeHtml(value) {
+      const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+      return String(value ?? '').replace(/[&<>"']/g, char => entities[char]);
+    }
+
     function renderSnapshotList() {
       const listEl = document.getElementById('snapshotList');
       const query = document.getElementById('searchInput').value.toLowerCase();
@@ -669,12 +674,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
         li.innerHTML = `
           <div class="snapshot-time">
-            <span>${timeStr}</span>
+            <span>${escapeHtml(timeStr)}</span>
           </div>
-          <div class="snapshot-id">${s.id}</div>
+          <div class="snapshot-id">${escapeHtml(s.id)}</div>
           <div class="snapshot-tags">
-            <span class="tag tabs">${tabsCount} tab(ów)</span>
-            <span class="tag gui">${guiCount} proj. GUI</span>
+            <span class="tag tabs">${escapeHtml(tabsCount)} tab(ów)</span>
+            <span class="tag gui">${escapeHtml(guiCount)} proj. GUI</span>
             <span class="tag">${(s.profiles || []).length} profili</span>
           </div>
         `;
@@ -695,7 +700,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       contentEl.innerHTML = '<div class="empty-state">Ładowanie metadanych snapshotu...</div>';
 
       try {
-        const res = await fetch(`/api/v1/snapshots/${id}`);
+        const res = await fetch(`/api/v1/snapshots/${encodeURIComponent(id)}`);
         const data = await res.json();
         renderSnapshotDetails(data);
         if (autoAction === 'novnc') {
@@ -714,7 +719,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           }
         }
       } catch (err) {
-        contentEl.innerHTML = `<div class="empty-state" style="color:var(--red)">Błąd ładowania snapshotu: ${err.message}</div>`;
+        contentEl.innerHTML = `<div class="empty-state" style="color:var(--red)">Błąd ładowania snapshotu: ${escapeHtml(err.message)}</div>`;
       }
     }
 
@@ -730,17 +735,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         tabsHtml = '<p style="color:var(--text-muted)">Brak zapisanych interaktywnych kart terminala.</p>';
       } else {
         tabsHtml = '<div class="tabs-grid">' + tabs.map((t, idx) => {
-          const provClass = t.provider ? `provider-${t.provider}` : 'provider-shell';
-          const provLabel = t.provider ? t.provider.toUpperCase() : 'SHELL';
+          const provClass = ['codex', 'agy', 'claude'].includes(t.provider) ? `provider-${t.provider}` : 'provider-shell';
+          const provLabel = t.provider ? String(t.provider).toUpperCase() : 'SHELL';
           return `
             <div class="tab-card" id="tabCard${idx}" onclick="focusTab(${idx})" style="cursor:pointer; transition:border-color 0.2s, box-shadow 0.2s">
               <div class="tab-header">
-                <span class="tab-provider ${provClass}">${provLabel}</span>
-                <span style="font-size:0.75rem; color:var(--text-muted)">${t.terminal || 'brak tty'}</span>
+                <span class="tab-provider ${provClass}">${escapeHtml(provLabel)}</span>
+                <span style="font-size:0.75rem; color:var(--text-muted)">${escapeHtml(t.terminal || 'brak tty')}</span>
               </div>
-              <div style="font-weight:600; font-size:0.9rem">${t.title}</div>
-              <div class="tab-cwd">${t.cwd}</div>
-              <div class="tab-cmd">▶ ${t.resume_command}</div>
+              <div style="font-weight:600; font-size:0.9rem">${escapeHtml(t.title)}</div>
+              <div class="tab-cwd">${escapeHtml(t.cwd)}</div>
+              <div class="tab-cmd">▶ ${escapeHtml(t.resume_command)}</div>
             </div>
           `;
         }).join('') + '</div>';
@@ -752,8 +757,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       } else {
         guiHtml = '<div style="display:flex; flex-direction:column; gap:6px;">' + gui.slice(0, 15).map(p => `
           <div style="background:var(--bg-card); padding:8px 12px; border-radius:6px; border:1px solid var(--border); font-family:var(--font-mono); font-size:0.8rem; display:flex; justify-content:space-between">
-            <span>${p.path}</span>
-            <span style="color:${p.state === 'open' ? 'var(--green)' : 'var(--text-muted)'}">${p.state}</span>
+            <span>${escapeHtml(p.path)}</span>
+            <span style="color:${p.state === 'open' ? 'var(--green)' : 'var(--text-muted)'}">${escapeHtml(p.state)}</span>
           </div>
         `).join('') + (gui.length > 15 ? `<p style="font-size:0.8rem; color:var(--text-muted)">...i jeszcze ${gui.length - 15} projektów</p>` : '') + '</div>';
       }
@@ -761,21 +766,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       contentEl.innerHTML = `
         <div class="detail-header">
           <div>
-            <div class="detail-title">${data.snapshot}</div>
-            <div class="detail-subtitle">Zapisano: ${timeStr} · Profile: ${profiles.join(', ')}</div>
+            <div class="detail-title">${escapeHtml(data.snapshot)}</div>
+            <div class="detail-subtitle">Zapisano: ${escapeHtml(timeStr)} · Profile: ${escapeHtml(profiles.join(', '))}</div>
           </div>
           <div class="actions-bar">
-            <button class="btn primary" onclick="launchNovnc('${data.snapshot}')">🖥️ Podgląd noVNC</button>
-            <button class="btn" onclick="captureScreenshot('${data.snapshot}')">📸 Zrzut ekranu</button>
-            <button class="btn success" onclick="launchTabs('${data.snapshot}')">💻 Uruchom taby w terminalu</button>
+            <button class="btn primary" id="previewNovnc">🖥️ Podgląd noVNC</button>
+            <button class="btn" id="previewScreenshot">📸 Zrzut ekranu</button>
+            <button class="btn success" id="previewTabs">💻 Uruchom taby w terminalu</button>
             <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; background:var(--bg-surface); padding:4px 8px; border-radius:8px; border:1px solid var(--border)">
               <span style="font-size:0.75rem; color:var(--text-muted); font-weight:700; margin-right:2px">WIRTUALIZACJA:</span>
-              <button class="btn btn-native" onclick="launchWorkspace('${data.snapshot}', false, 'native')" title="Natywny wirtualny pulpit X11 na hoście przez Twinerd">🖥️ Natywny</button>
-              <button class="btn btn-kasm" onclick="launchWorkspace('${data.snapshot}', false, 'kasm')" title="Izolowany Kasm Workspace ze stagingiem plików przez twinerd-kasm">📦 Kasm</button>
-              <button class="btn btn-clonebox" onclick="launchWorkspace('${data.snapshot}', false, 'clonebox')" title="Wirtualizacja KVM/QEMU maszyn z projektu clonebox (wronai/clonebox)">🎛️ CloneBox VM</button>
-              <button class="btn btn-clonebox-cnt" onclick="launchWorkspace('${data.snapshot}', false, 'clonebox-container')" title="Lekka konteneryzacja za pośrednictwem clonebox.container (Docker/Podman)">🐳 CloneBox Cnt</button>
-              <button class="btn btn-pelorus" onclick="launchWorkspace('${data.snapshot}', false, 'pelorus')" title="Cyfrowy bliźniak i arbiter sesji twinerd-pelorus">🧭 Pelorus</button>
-              <button class="btn" onclick="promptNewWorkspace('${data.snapshot}')" title="Uruchom kolejną instancję wybranego silnika dla tej sesji">+ Nowy</button>
+              <button class="btn btn-native" id="preview-native" title="Natywny wirtualny pulpit X11 na hoście przez Twinerd">🖥️ Natywny</button>
+              <button class="btn btn-kasm" id="preview-kasm" title="Izolowany Kasm Workspace ze stagingiem plików przez twinerd-kasm">📦 Kasm</button>
+              <button class="btn btn-clonebox" id="preview-clonebox" title="Wirtualizacja KVM/QEMU maszyn z projektu clonebox (wronai/clonebox)">🎛️ CloneBox VM</button>
+              <button class="btn btn-clonebox-cnt" id="preview-clonebox-container" title="Lekka konteneryzacja za pośrednictwem clonebox.container (Docker/Podman)">🐳 CloneBox Cnt</button>
+              <button class="btn btn-pelorus" id="preview-pelorus" title="Cyfrowy bliźniak i arbiter sesji twinerd-pelorus">🧭 Pelorus</button>
+              <button class="btn" id="previewNewWorkspace" title="Uruchom kolejną instancję wybranego silnika dla tej sesji">+ Nowy</button>
             </div>
           </div>
         </div>
@@ -787,8 +792,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
         <div class="section-title">Polecenie startowe w systemowym gnome-terminal</div>
         <div class="code-box">
-          <button class="copy-btn" onclick="copyText('${btoa(data.launch_script || '')}')">Kopiuj</button>
-          <code>${data.launch_script || '# Brak zdefiniowanych tabów'}</code>
+          <button class="copy-btn" id="copyLaunchScript">Kopiuj</button>
+          <code>${escapeHtml(data.launch_script || '# Brak zdefiniowanych tabów')}</code>
         </div>
 
         <div class="section-title">Projekty JetBrains & Okna GUI (${gui.length})</div>
@@ -798,12 +803,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:10px 14px; margin-top:20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px">
             <div style="display:flex; align-items:center; gap:8px">
               <span style="font-size:1.1rem">🎮</span>
-              <span style="font-weight:600; font-size:0.85rem">Akceleracja GPU: ${data.system_gpu.name}</span>
-              <span style="font-size:0.75rem; color:var(--text-muted)">Driver ${data.system_gpu.driver_version} · CUDA ${data.system_gpu.cuda_version}</span>
+              <span style="font-weight:600; font-size:0.85rem">Akceleracja GPU: ${escapeHtml(data.system_gpu.name)}</span>
+              <span style="font-size:0.75rem; color:var(--text-muted)">Driver ${escapeHtml(data.system_gpu.driver_version)} · CUDA ${escapeHtml(data.system_gpu.cuda_version)}</span>
             </div>
             <div style="display:flex; gap:8px; align-items:center">
-              <span class="tag" style="background:rgba(166,227,161,0.15); color:var(--green)">VRAM: ${data.system_gpu.memory_used_mb} / ${data.system_gpu.memory_total_mb} MiB</span>
-              <span class="tag">${data.system_gpu.temperature_c}°C</span>
+              <span class="tag" style="background:rgba(166,227,161,0.15); color:var(--green)">VRAM: ${escapeHtml(data.system_gpu.memory_used_mb)} / ${escapeHtml(data.system_gpu.memory_total_mb)} MiB</span>
+              <span class="tag">${escapeHtml(data.system_gpu.temperature_c)}°C</span>
               <button class="btn" style="padding:2px 8px; font-size:0.75rem" onclick="toggleAppsModal('gpu_hardware')">Szczegóły GPU ↗</button>
             </div>
           </div>
@@ -815,8 +820,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             ${data.recorded_gui_apps.map(a => `
               <div style="background:var(--bg-card); padding:8px 12px; border-radius:6px; border:1px solid var(--border); display:flex; justify-content:space-between; align-items:center">
                 <div>
-                  <div style="font-weight:600; font-size:0.85rem">${a.name}</div>
-                  <div style="font-size:0.72rem; color:var(--text-muted); font-family:var(--font-mono)">PID: ${a.pid} ${a.cmd ? ('· ' + a.cmd) : ''}</div>
+                  <div style="font-weight:600; font-size:0.85rem">${escapeHtml(a.name)}</div>
+                  <div style="font-size:0.72rem; color:var(--text-muted); font-family:var(--font-mono)">PID: ${escapeHtml(a.pid)} ${escapeHtml(a.cmd ? ('· ' + a.cmd) : '')}</div>
                 </div>
                 <span class="tag ${a.has_profile ? 'gui' : ''}">${a.has_profile ? 'Profil ✅' : 'Proces'}</span>
               </div>
@@ -832,6 +837,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <button class="btn primary" onclick="toggleAppsModal()">Otwórz katalog aplikacji PC ↗</button>
         </div>
       `;
+      document.getElementById('previewNovnc').onclick = () => launchNovnc(data.snapshot);
+      document.getElementById('previewScreenshot').onclick = () => captureScreenshot(data.snapshot);
+      document.getElementById('previewTabs').onclick = () => launchTabs(data.snapshot);
+      document.getElementById('preview-native').onclick = () => launchWorkspace(data.snapshot, false, 'native');
+      document.getElementById('preview-kasm').onclick = () => launchWorkspace(data.snapshot, false, 'kasm');
+      document.getElementById('preview-clonebox').onclick = () => launchWorkspace(data.snapshot, false, 'clonebox');
+      document.getElementById('preview-clonebox-container').onclick = () => launchWorkspace(data.snapshot, false, 'clonebox-container');
+      document.getElementById('preview-pelorus').onclick = () => launchWorkspace(data.snapshot, false, 'pelorus');
+      document.getElementById('previewNewWorkspace').onclick = () => promptNewWorkspace(data.snapshot);
+      document.getElementById('copyLaunchScript').onclick = () => copyText(data.launch_script || '');
     }
 
     let activeWorkspaces = [];
@@ -1106,8 +1121,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
-    function copyText(b64) {
-      const text = atob(b64);
+    function copyText(text) {
       navigator.clipboard.writeText(text);
       showToast('Skopiowano do schowka!');
     }
