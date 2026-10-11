@@ -220,3 +220,55 @@ def test_provider_label_and_safe_style(snapshot, provider):
     style = provider if provider in {"agy", "claude"} else "shell"
     assert any(attrs.get("class") == "tab-provider provider-" + style for _, attrs in parsed.tags)
     assert (provider.upper() if provider else "SHELL") in "".join(parsed.text)
+
+
+def test_testwins_ux_styles_and_shortcuts_bar():
+    assert ":focus-visible" in DASHBOARD_HTML
+    assert "prefers-reduced-motion" in DASHBOARD_HTML
+    assert "status-pulse" in DASHBOARD_HTML
+    assert "shortcutsBar" in DASHBOARD_HTML
+    assert "novnc-container.fullscreen" in DASHBOARD_HTML
+
+
+def test_testwins_ux_workspaces_bar_rendering():
+    node = shutil.which("node")
+    assert node
+    test_script = r"""
+const vm = require('node:vm');
+const fs = require('node:fs');
+const nodes = new Map();
+const element = () => ({innerHTML: '', textContent: '', value: '', style: {}, children: [],
+  addEventListener() {}, appendChild(child) { this.children.push(child); },
+  classList: {add() {}, remove() {}}});
+const getElementById = id => {
+  if (!nodes.has(id)) nodes.set(id, element());
+  return nodes.get(id);
+};
+const context = vm.createContext({
+  document: {getElementById, createElement: element, readyState: 'loading', addEventListener() {}},
+  window: {addEventListener() {}, location: new URL('http://localhost/'), history: {replaceState() {}}},
+  URL, URLSearchParams, console, setTimeout() {}, setInterval() {}, navigator: {clipboard: {writeText() {}}}
+});
+const script = fs.readFileSync(process.argv[1], 'utf8');
+vm.runInContext(script, context);
+vm.runInContext('activeWorkspaces = [{workspace_id: "ws-uncrash", name: "Uncrash", engine: "native", tabs_count: 3}, {workspace_id: "ws-twinerd", name: "Twinerd", engine: "native", tabs_count: 2}]; renderWorkspacesBar();', context);
+const chipsHtml = getElementById('workspacesChips').innerHTML;
+const barDisplay = getElementById('workspacesBar').style.display;
+const shortcutsDisplay = getElementById('shortcutsBar').style.display;
+process.stdout.write(JSON.stringify({chipsHtml, barDisplay, shortcutsDisplay}));
+"""
+    script = DASHBOARD_HTML.split("<script>", 1)[1].split("</script>", 1)[0]
+    import tempfile, os
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+        f.write(script)
+        temp_js = f.name
+    try:
+        run = subprocess.run([node, "-e", test_script, temp_js], capture_output=True, text=True, check=True)
+        out = json.loads(run.stdout)
+        assert out["barDisplay"] == "flex"
+        assert out["shortcutsDisplay"] == "flex"
+        assert "kbd-hint" in out["chipsHtml"]
+        assert "Uncrash" in out["chipsHtml"]
+        assert "Twinerd" in out["chipsHtml"]
+    finally:
+        os.unlink(temp_js)
