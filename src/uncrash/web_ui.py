@@ -1040,6 +1040,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const chips = document.getElementById('workspacesChips');
       if (!bar || !chips) return;
 
+      visibleWorkspaces = [];
       if (activeWorkspaces.length === 0) {
         bar.style.display = 'none';
         if (shortcuts) shortcuts.style.display = 'none';
