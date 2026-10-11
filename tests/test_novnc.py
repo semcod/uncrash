@@ -11,7 +11,7 @@ from uncrash.store import Store
 from uncrash.runtime import Launcher
 
 
-pytestmark = pytest.mark.skipif(os.environ.get('UNCRASH_NOVNC_TEST') != '1', reason='Opt-in real Twinerd desktop fixture')
+opt_in_twinerd = pytest.mark.skipif(os.environ.get('UNCRASH_NOVNC_TEST') != '1', reason='Opt-in real Twinerd desktop fixture')
 
 
 def sandbox(home, display, argv):
@@ -39,6 +39,7 @@ def wait(probe, timeout=30):
     raise TimeoutError('Owned test application readiness timeout')
 
 
+@opt_in_twinerd
 def test_chrome_session_and_terminal_recovery_on_twinerd_novnc(tmp_path):
     from twinerd_native.session import NativeClone, port, tabs, value
     from twinerd_cdp import CDPClient
@@ -131,6 +132,7 @@ def test_chrome_session_and_terminal_recovery_on_twinerd_novnc(tmp_path):
                 source.stop()
 
 
+@opt_in_twinerd
 def test_portable_pycharm_files_launch_on_owned_twinerd_novnc(tmp_path):
     from uncrash.recovery import export_bundle, import_bundle
     from twinerd_native.session import NativeClone, value
@@ -173,3 +175,216 @@ def test_portable_pycharm_files_launch_on_owned_twinerd_novnc(tmp_path):
         launcher.stop();desktop.stop()
         artifacts=Path(os.environ.get('UNCRASH_NOVNC_ARTIFACTS',str(tmp_path)));artifacts.mkdir(parents=True,exist_ok=True)
         (artifacts/'portable-pycharm-proof.json').write_text(json.dumps(proof,indent=2)+'\n')
+
+
+class DummyProcess:
+    def __init__(self, pid=1234):
+        self.pid = pid
+        self._alive = True
+
+    def poll(self):
+        return None if self._alive else 0
+
+    def terminate(self):
+        self._alive = False
+
+    def kill(self):
+        self._alive = False
+
+    def wait(self, timeout=None):
+        self._alive = False
+        return 0
+
+
+def test_setup_jetbrains_sandbox_creates_isolated_vmoptions(tmp_path):
+    from uncrash.preview import setup_jetbrains_sandbox
+    sandbox_info = setup_jetbrains_sandbox(tmp_path, display=155, project_path="/home/tom/project-a", executable="/usr/bin/pycharm")
+    assert Path(sandbox_info['sandbox_dir']).is_dir()
+    assert Path(sandbox_info['config_dir']).is_dir()
+    assert Path(sandbox_info['system_dir']).is_dir()
+    assert Path(sandbox_info['plugins_dir']).is_dir()
+    assert Path(sandbox_info['log_dir']).is_dir()
+
+    vm_text = Path(sandbox_info['vmoptions_path']).read_text()
+    assert f"-Didea.config.path={sandbox_info['config_dir']}" in vm_text
+    assert f"-Didea.system.path={sandbox_info['system_dir']}" in vm_text
+    assert "-Dawt.toolkit.name=XToolkit" in vm_text
+    assert "UncrashPyCharm_disp155_" in sandbox_info['selector']
+    assert sandbox_info['executable'] == "/usr/bin/pycharm"
+    assert sandbox_info['project_path'] == "/home/tom/project-a"
+
+
+def test_restore_project_in_workspace_creates_isolated_session(tmp_path, monkeypatch):
+    import shutil
+    import uncrash.preview as prev
+
+    display_counter = 160
+    port_counter = 7000
+
+    def fake_display(*args, **kwargs):
+        nonlocal display_counter
+        display_counter += 1
+        return display_counter
+
+    def fake_port(*args, **kwargs):
+        nonlocal port_counter
+        port_counter += 1
+        return port_counter
+
+    monkeypatch.setattr(prev, '_find_free_display', fake_display)
+    monkeypatch.setattr(prev, '_find_free_port', fake_port)
+    monkeypatch.setattr(shutil, 'which', lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(subprocess, 'Popen', lambda *args, **kwargs: DummyProcess())
+    monkeypatch.setattr(subprocess, 'run', lambda *args, **kwargs: None)
+    monkeypatch.setattr(time, 'sleep', lambda s: None)
+
+    session = prev.restore_project_in_workspace(
+        project_path=str(tmp_path / "project-fixos"),
+        app_name="pycharm",
+        engine="native",
+        host="local"
+    )
+
+    try:
+        assert session.is_alive()
+        assert session.display.startswith(":")
+        assert "vnc.html?autoconnect=true" in session.novnc_url
+        assert session.project_path == str(tmp_path / "project-fixos")
+        assert len(session.gui_apps) == 1
+        assert session.gui_apps[0]['name'] == "pycharm"
+        assert session.host == "local"
+
+        d = session.to_dict()
+        assert d['workspace_id'] == session.workspace_id
+        assert d['display'] == session.display
+        assert d['novnc_url'] == session.novnc_url
+        assert d['status'] == "running"
+    finally:
+        prev.workspace_manager.close_workspace(session.workspace_id)
+
+
+def test_restore_all_projects_isolated_allocates_distinct_workspaces_and_displays(tmp_path, monkeypatch):
+    import shutil
+    import uncrash.preview as prev
+
+    display_counter = 200
+    port_counter = 8000
+
+    def fake_display(*args, **kwargs):
+        nonlocal display_counter
+        display_counter += 1
+        return display_counter
+
+    def fake_port(*args, **kwargs):
+        nonlocal port_counter
+        port_counter += 1
+        return port_counter
+
+    monkeypatch.setattr(prev, '_find_free_display', fake_display)
+    monkeypatch.setattr(prev, '_find_free_port', fake_port)
+    monkeypatch.setattr(shutil, 'which', lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(subprocess, 'Popen', lambda *args, **kwargs: DummyProcess())
+    monkeypatch.setattr(subprocess, 'run', lambda *args, **kwargs: None)
+    monkeypatch.setattr(time, 'sleep', lambda s: None)
+
+    projects = [
+        str(tmp_path / "uncrash"),
+        str(tmp_path / "selective-tutor"),
+        str(tmp_path / "fixos"),
+        str(tmp_path / "maskservice")
+    ]
+
+    sessions = prev.restore_all_projects_isolated(projects, app_name="pycharm", engine="native")
+    try:
+        assert len(sessions) == 4
+        displays = [s.display for s in sessions]
+        rfb_ports = [s.rfb_port for s in sessions]
+        ws_ports = [s.ws_port for s in sessions]
+        wids = [s.workspace_id for s in sessions]
+
+        # Each workspace must have a distinct display slot
+        assert len(set(displays)) == 4
+        # Each workspace must have distinct network ports
+        assert len(set(rfb_ports)) == 4
+        assert len(set(ws_ports)) == 4
+        # Each workspace must have a unique identifier
+        assert len(set(wids)) == 4
+
+        for s, p in zip(sessions, projects):
+            assert s.project_path == p
+            assert s.is_alive()
+    finally:
+        for s in sessions:
+            prev.workspace_manager.close_workspace(s.workspace_id)
+
+
+def test_restore_application_in_workspace_creates_minis_transfer(tmp_path, monkeypatch):
+    import shutil
+    import uncrash.preview as prev
+
+    display_counter = 250
+    port_counter = 9000
+
+    monkeypatch.setattr(prev, '_find_free_display', lambda *a, **k: 251)
+    monkeypatch.setattr(prev, '_find_free_port', lambda *a, **k: 9001)
+    monkeypatch.setattr(shutil, 'which', lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(subprocess, 'Popen', lambda *args, **kwargs: DummyProcess())
+    monkeypatch.setattr(subprocess, 'run', lambda *args, **kwargs: None)
+    monkeypatch.setattr(time, 'sleep', lambda s: None)
+
+    app_spec = {
+        'name': 'Cursor AI Editor',
+        'project': str(tmp_path / 'my-cursor-app'),
+        'command': ['cursor', str(tmp_path / 'my-cursor-app')]
+    }
+
+    session = prev.restore_application_in_workspace(
+        app_spec=app_spec,
+        engine="kasm",
+        host="tom@minis"
+    )
+
+    try:
+        assert session.host == "tom@minis"
+        assert session.engine == "kasm"
+        assert session.workspace_dir is not None
+
+        transfer_file = Path(session.workspace_dir) / "minis_transfer.json"
+        assert transfer_file.is_file()
+        data = json.loads(transfer_file.read_text())
+        assert data['target_host'] == "tom@minis"
+        assert data['engine'] == "kasm"
+        assert data['status'] == "ready_for_minis_transfer"
+    finally:
+        prev.workspace_manager.close_workspace(session.workspace_id)
+
+
+def test_workspace_session_serialization_and_cleanup(tmp_path, monkeypatch):
+    import shutil
+    import uncrash.preview as prev
+
+    monkeypatch.setattr(prev, '_find_free_display', lambda *a, **k: 260)
+    monkeypatch.setattr(prev, '_find_free_port', lambda *a, **k: 9100)
+    monkeypatch.setattr(shutil, 'which', lambda name: f"/usr/bin/{name}")
+    dummy_proc = DummyProcess()
+    monkeypatch.setattr(subprocess, 'Popen', lambda *args, **kwargs: dummy_proc)
+    monkeypatch.setattr(subprocess, 'run', lambda *args, **kwargs: None)
+    monkeypatch.setattr(time, 'sleep', lambda s: None)
+
+    session = prev.restore_project_in_workspace(
+        project_path=str(tmp_path / "cleanup-test"),
+        app_name="pycharm",
+        engine="native"
+    )
+
+    wid = session.workspace_id
+    assert prev.workspace_manager.get_workspace(wid) is not None
+    assert any(w['workspace_id'] == wid for w in prev.workspace_manager.list_workspaces())
+
+    # Close workspace
+    closed = prev.workspace_manager.close_workspace(wid)
+    assert closed is True
+    assert not dummy_proc._alive
+    assert prev.workspace_manager.get_workspace(wid) is None
+    assert not any(w['workspace_id'] == wid for w in prev.workspace_manager.list_workspaces())
+
