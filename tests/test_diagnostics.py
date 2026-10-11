@@ -553,4 +553,92 @@ def test_find_native_worker_discovery(tmp_path):
     assert found == built
 
 
+def test_native_snapshot_health_matches_python_parity(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    import hashlib
+    now = datetime(2026, 10, 11, 12, 0, 0, tzinfo=timezone.utc)
+
+    # 1. Valid snapshot with jetbrains provider process
+    s1_id = '20261011T100000000000-aaaaaaaaaaaa'
+    s1_dir = tmp_path / 'snapshots' / s1_id
+    s1_dir.mkdir(parents=True)
+    manifest1 = {
+        'schema': 'uncrash.snapshot/v1',
+        'id': s1_id,
+        'origin': 'test-host',
+        'created_at': '2026-10-11T10:00:00+00:00',
+        'jetbrains': {
+            'processes': [{'pid': 100, 'root_ide_candidate': True}],
+            'descendants': [
+                {'pid': 200, 'ppid': 100, 'name': 'codex', 'start_ticks': '1234', 'cwd': '/home/test', 'terminal': '/dev/pts/1'}
+            ]
+        }
+    }
+    raw1 = json.dumps(manifest1).encode()
+    (s1_dir / 'manifest.json').write_bytes(raw1)
+    (s1_dir / 'manifest.sha256').write_text(hashlib.sha256(raw1).hexdigest())
+
+    # 2. Tampered snapshot (checksum mismatch)
+    s2_id = '20261011T101000000000-bbbbbbbbbbbb'
+    s2_dir = tmp_path / 'snapshots' / s2_id
+    s2_dir.mkdir(parents=True)
+    (s2_dir / 'manifest.json').write_bytes(b'{"schema": "uncrash.snapshot/v1"}')
+    (s2_dir / 'manifest.sha256').write_text('badhash' * 8)
+
+    # 3. Future snapshot (invalid capture time)
+    s3_id = '20261011T130000000000-cccccccccccc'
+    s3_dir = tmp_path / 'snapshots' / s3_id
+    s3_dir.mkdir(parents=True)
+    manifest3 = {
+        'schema': 'uncrash.snapshot/v1',
+        'id': s3_id,
+        'created_at': '2026-10-11T13:00:00+00:00',
+    }
+    raw3 = json.dumps(manifest3).encode()
+    (s3_dir / 'manifest.json').write_bytes(raw3)
+    (s3_dir / 'manifest.sha256').write_text(hashlib.sha256(raw3).hexdigest())
+
+    # 4. Encrypted snapshot
+    s4_id = '20261011T102000000000-dddddddddddd'
+    s4_dir = tmp_path / 'snapshots' / s4_id
+    s4_dir.mkdir(parents=True)
+    (s4_dir / 'manifest.enc').write_bytes(b'encrypted-bytes')
+
+    native_res = d.native_snapshot_health(tmp_path, interval=300, now=now)
+    assert native_res is not None
+
+    # Run pure python fallback by disabling native call
+    monkeypatch.setattr(d, 'native_snapshot_health', lambda *a, **kw: None)
+    py_res = d.snapshot_health(tmp_path, interval=300, now=now)
+
+    assert native_res['verified_plain_manifests'] == py_res['verified_plain_manifests'] == 1
+    assert native_res['invalid_manifests'] == py_res['invalid_manifests'] == 2
+    assert native_res['latest_snapshot'] == py_res['latest_snapshot'] == s1_id
+    assert native_res['encrypted_manifest_count'] == py_res['encrypted_manifest_count'] == 1
+    assert native_res['stale'] == py_res['stale']
+    assert native_res['freshness'] == py_res['freshness']
+    assert len(native_res['historical_ide_provider_observations']) == len(py_res['historical_ide_provider_observations']) == 1
+    obs = native_res['historical_ide_provider_observations'][0]
+    assert obs['provider'] == 'codex'
+    assert obs['pid'] == 200
+    assert obs['ide_pid'] == 100
+
+
+def test_native_snapshot_health_fallback(tmp_path, monkeypatch):
+    p = tmp_path / 'snapshots' / 's1'
+    p.mkdir(parents=True)
+    raw = json.dumps({'schema': 'uncrash.snapshot/v1', 'id': 's1', 'created_at': '2026-01-01T00:00:00+00:00'}).encode()
+    (p / 'manifest.json').write_bytes(raw)
+    (p / 'manifest.sha256').write_text(hashlib.sha256(raw).hexdigest())
+
+    monkeypatch.setattr(d, 'find_native_worker', lambda *args, **kwargs: None)
+    monkeypatch.setattr('shutil.which', lambda *args, **kwargs: None)
+
+    assert d.native_snapshot_health(tmp_path) is None
+    res = d.snapshot_health(tmp_path)
+    assert res['verified_plain_manifests'] == 1
+    assert res['latest_snapshot'] == 's1'
+
+
+
 

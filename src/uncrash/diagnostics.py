@@ -348,8 +348,46 @@ def provider_inventory(home, check_integrity=False):
     return result
 
 
+def native_snapshot_health(state: Path, interval: int = 300, now: datetime = None, state_root: Path = None) -> dict | None:
+    """Attempt fast native Rust manifest verification and snapshot health audit; returns None on fallback."""
+    binary = find_native_worker(state_root)
+    if binary is None and shutil.which('rustc'):
+        try:
+            target_root = state_root or (Path(tempfile.gettempdir()) / f'uncrash-{os.getuid()}')
+            binary = build_native(target_root)
+        except (RecoveryError, OSError):
+            binary = None
+    if binary is None:
+        return None
+    try:
+        args = [str(binary), '--snapshot-health', str(state), str(interval)]
+        if now is not None:
+            args.append(now.isoformat())
+        proc = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if proc.returncode == 0:
+            data = json.loads(proc.stdout.strip() or '{}')
+            if isinstance(data, dict) and 'verified_plain_manifests' in data:
+                return data
+    except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
 def snapshot_health(state, interval=300, now=None):
-    now = now or datetime.now(timezone.utc); snapshots = []; invalid = 0; historical = {}; encrypted = []
+    now = now or datetime.now(timezone.utc)
+    try:
+        no_links(state)
+        native_result = native_snapshot_health(state, interval, now)
+        if native_result is not None:
+            return native_result
+    except (OSError, RecoveryError):
+        pass
+    snapshots = []; invalid = 0; historical = {}; encrypted = []
     root = no_links(Path(state) / 'snapshots')
     for directory in sorted(root.glob('*')):
         if directory.name.startswith('.'): continue

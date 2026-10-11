@@ -1,9 +1,9 @@
 //! Linux snapshot worker: stable reads, OpenSSL SHA256/AES-GCM, zlib, COW/cached copies.
 //! Private stdin protocol; stdout contains metadata only. No shell or network execution.
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, HashSet, VecDeque},
     ffi::{c_int, c_ulong, c_void, CString},
-    fs::{File, Metadata},
+    fs::{self, File, Metadata},
     io::{self, Read, Seek, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
@@ -718,10 +718,1122 @@ fn scan_panics(args: &[String]) -> io::Result<()> {
     println!("[{}]", panics_json.join(","));
     Ok(())
 }
+
+fn sha256_digest(data: &[u8]) -> Option<String> {
+    unsafe {
+        let ctx = EVP_MD_CTX_new();
+        if ctx.is_null() {
+            return None;
+        }
+        let md = EVP_sha256();
+        if EVP_DigestInit_ex(ctx, md, ptr::null_mut()) != 1 {
+            EVP_MD_CTX_free(ctx);
+            return None;
+        }
+        if EVP_DigestUpdate(ctx, data.as_ptr() as *const c_void, data.len()) != 1 {
+            EVP_MD_CTX_free(ctx);
+            return None;
+        }
+        let mut out = [0u8; 32];
+        let mut len = 0u32;
+        if EVP_DigestFinal_ex(ctx, out.as_mut_ptr(), &mut len) != 1 || len != 32 {
+            EVP_MD_CTX_free(ctx);
+            return None;
+        }
+        EVP_MD_CTX_free(ctx);
+        let mut hex = String::with_capacity(64);
+        for b in out {
+            use std::fmt::Write;
+            let _ = write!(&mut hex, "{:02x}", b);
+        }
+        Some(hex)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum JsonValue {
+    Null,
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<JsonValue>),
+    Object(Vec<(String, JsonValue)>),
+}
+
+impl JsonValue {
+    fn get(&self, key: &str) -> Option<&JsonValue> {
+        match self {
+            JsonValue::Object(map) => {
+                for (k, v) in map {
+                    if k == key {
+                        return Some(v);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn as_str(&self) -> Option<&str> {
+        match self {
+            JsonValue::String(s) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    fn as_i64(&self) -> Option<i64> {
+        match self {
+            JsonValue::Number(n) => Some(*n as i64),
+            JsonValue::String(s) => s.parse::<i64>().ok(),
+            _ => None,
+        }
+    }
+
+    fn as_bool(&self) -> Option<bool> {
+        match self {
+            JsonValue::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    fn as_array(&self) -> Option<&[JsonValue]> {
+        match self {
+            JsonValue::Array(arr) => Some(arr.as_slice()),
+            _ => None,
+        }
+    }
+}
+
+struct JsonParser<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> JsonParser<'a> {
+    fn new(input: &'a str) -> Self {
+        Self { bytes: input.as_bytes(), pos: 0 }
+    }
+
+    fn peek(&self) -> Option<u8> {
+        if self.pos < self.bytes.len() {
+            Some(self.bytes[self.pos])
+        } else {
+            None
+        }
+    }
+
+    fn bump(&mut self) -> Option<u8> {
+        if self.pos < self.bytes.len() {
+            let b = self.bytes[self.pos];
+            self.pos += 1;
+            Some(b)
+        } else {
+            None
+        }
+    }
+
+    fn skip_whitespace(&mut self) {
+        while let Some(b) = self.peek() {
+            if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn parse(&mut self) -> Option<JsonValue> {
+        self.skip_whitespace();
+        let val = match self.peek()? {
+            b'n' => self.parse_null()?,
+            b't' | b'f' => self.parse_bool()?,
+            b'"' => JsonValue::String(self.parse_string()?),
+            b'[' => self.parse_array(false)?,
+            b'{' => self.parse_object(false, false)?,
+            b'-' | b'0'..=b'9' => self.parse_number()?,
+            _ => return None,
+        };
+        self.skip_whitespace();
+        Some(val)
+    }
+
+    fn parse_manifest_health(&mut self) -> Option<JsonValue> {
+        self.skip_whitespace();
+        if self.peek()? != b'{' {
+            return None;
+        }
+        self.parse_object(true, false)
+    }
+
+    fn parse_manifest_preview(&mut self) -> Option<JsonValue> {
+        self.skip_whitespace();
+        if self.peek()? != b'{' {
+            return None;
+        }
+        self.parse_object(true, true)
+    }
+
+    fn skip_value(&mut self) -> bool {
+        self.skip_whitespace();
+        match self.peek() {
+            Some(b'"') => self.skip_string(),
+            Some(b'[') => self.skip_compound(b'[', b']'),
+            Some(b'{') => self.skip_compound(b'{', b'}'),
+            Some(b'-') | Some(b'0'..=b'9') => {
+                while let Some(b) = self.peek() {
+                    if b.is_ascii_digit() || b == b'.' || b == b'e' || b == b'E' || b == b'+' || b == b'-' {
+                        self.pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                true
+            }
+            Some(b't') => {
+                if self.pos + 4 <= self.bytes.len() && &self.bytes[self.pos..self.pos+4] == b"true" {
+                    self.pos += 4; true
+                } else { false }
+            }
+            Some(b'f') => {
+                if self.pos + 5 <= self.bytes.len() && &self.bytes[self.pos..self.pos+5] == b"false" {
+                    self.pos += 5; true
+                } else { false }
+            }
+            Some(b'n') => {
+                if self.pos + 4 <= self.bytes.len() && &self.bytes[self.pos..self.pos+4] == b"null" {
+                    self.pos += 4; true
+                } else { false }
+            }
+            _ => false,
+        }
+    }
+
+    fn skip_string(&mut self) -> bool {
+        if self.bump() != Some(b'"') { return false; }
+        while self.pos < self.bytes.len() {
+            let b = self.bytes[self.pos];
+            if b == b'"' {
+                self.pos += 1;
+                return true;
+            }
+            if b == b'\\' {
+                self.pos += 2;
+            } else {
+                self.pos += 1;
+            }
+        }
+        false
+    }
+
+    fn skip_compound(&mut self, open: u8, close: u8) -> bool {
+        if self.bump() != Some(open) { return false; }
+        let mut depth = 1usize;
+        while self.pos < self.bytes.len() {
+            let b = self.bytes[self.pos];
+            if b == b'"' {
+                if !self.skip_string() { return false; }
+            } else if b == open {
+                depth += 1;
+                self.pos += 1;
+            } else if b == close {
+                depth -= 1;
+                self.pos += 1;
+                if depth == 0 { return true; }
+            } else {
+                self.pos += 1;
+            }
+        }
+        false
+    }
+
+    fn parse_null(&mut self) -> Option<JsonValue> {
+        if self.pos + 4 <= self.bytes.len() && &self.bytes[self.pos..self.pos+4] == b"null" {
+            self.pos += 4;
+            Some(JsonValue::Null)
+        } else {
+            None
+        }
+    }
+
+    fn parse_bool(&mut self) -> Option<JsonValue> {
+        if self.peek()? == b't' {
+            if self.pos + 4 <= self.bytes.len() && &self.bytes[self.pos..self.pos+4] == b"true" {
+                self.pos += 4;
+                Some(JsonValue::Bool(true))
+            } else {
+                None
+            }
+        } else {
+            if self.pos + 5 <= self.bytes.len() && &self.bytes[self.pos..self.pos+5] == b"false" {
+                self.pos += 5;
+                Some(JsonValue::Bool(false))
+            } else {
+                None
+            }
+        }
+    }
+
+    fn parse_string(&mut self) -> Option<String> {
+        if self.bump()? != b'"' {
+            return None;
+        }
+        let start = self.pos;
+        let mut has_escapes = false;
+        while self.pos < self.bytes.len() {
+            let b = self.bytes[self.pos];
+            if b == b'"' {
+                break;
+            }
+            if b == b'\\' {
+                has_escapes = true;
+                self.pos += 2;
+            } else {
+                self.pos += 1;
+            }
+        }
+        if self.pos >= self.bytes.len() {
+            return None;
+        }
+        let end = self.pos;
+        self.pos += 1;
+
+        if !has_escapes {
+            return std::str::from_utf8(&self.bytes[start..end]).ok().map(|s| s.to_string());
+        }
+
+        let mut s = String::with_capacity(end - start);
+        let mut i = start;
+        while i < end {
+            if self.bytes[i] == b'\\' {
+                i += 1;
+                if i >= end { return None; }
+                match self.bytes[i] {
+                    b'"' => s.push('"'),
+                    b'\\' => s.push('\\'),
+                    b'/' => s.push('/'),
+                    b'b' => s.push('\x08'),
+                    b'f' => s.push('\x0c'),
+                    b'n' => s.push('\n'),
+                    b'r' => s.push('\r'),
+                    b't' => s.push('\t'),
+                    b'u' => {
+                        i += 1;
+                        if i + 4 > end { return None; }
+                        let hex_str = std::str::from_utf8(&self.bytes[i..i+4]).ok()?;
+                        let code = u32::from_str_radix(hex_str, 16).ok()?;
+                        if let Some(ch) = char::from_u32(code) {
+                            s.push(ch);
+                        } else {
+                            s.push('\u{fffd}');
+                        }
+                        i += 3;
+                    }
+                    _ => return None,
+                }
+            } else {
+                let start_run = i;
+                while i < end && self.bytes[i] != b'\\' {
+                    i += 1;
+                }
+                let slice = std::str::from_utf8(&self.bytes[start_run..i]).ok()?;
+                s.push_str(slice);
+                continue;
+            }
+            i += 1;
+        }
+        Some(s)
+    }
+
+    fn parse_number(&mut self) -> Option<JsonValue> {
+        let start = self.pos;
+        if self.peek() == Some(b'-') {
+            self.pos += 1;
+        }
+        while let Some(b) = self.peek() {
+            if b.is_ascii_digit() || b == b'.' || b == b'e' || b == b'E' || b == b'+' || b == b'-' {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        let s = std::str::from_utf8(&self.bytes[start..self.pos]).ok()?;
+        s.parse::<f64>().ok().map(JsonValue::Number)
+    }
+
+    fn parse_array(&mut self, is_profiles: bool) -> Option<JsonValue> {
+        if self.bump()? != b'[' {
+            return None;
+        }
+        let mut items = Vec::new();
+        self.skip_whitespace();
+        if self.peek() == Some(b']') {
+            self.bump();
+            return Some(JsonValue::Array(items));
+        }
+        loop {
+            let item = if is_profiles {
+                self.parse_object(false, true)?
+            } else {
+                self.parse()?
+            };
+            items.push(item);
+            self.skip_whitespace();
+            match self.peek()? {
+                b',' => {
+                    self.bump();
+                    self.skip_whitespace();
+                }
+                b']' => {
+                    self.bump();
+                    break;
+                }
+                _ => return None,
+            }
+        }
+        Some(JsonValue::Array(items))
+    }
+
+    fn parse_object(&mut self, is_manifest_root: bool, is_preview: bool) -> Option<JsonValue> {
+        if self.bump()? != b'{' {
+            return None;
+        }
+        let mut entries = Vec::new();
+        self.skip_whitespace();
+        if self.peek() == Some(b'}') {
+            self.bump();
+            return Some(JsonValue::Object(entries));
+        }
+        loop {
+            self.skip_whitespace();
+            let key = self.parse_string()?;
+            self.skip_whitespace();
+            if self.bump()? != b':' {
+                return None;
+            }
+            if is_manifest_root {
+                if is_preview {
+                    if key != "schema" && key != "id" && key != "created_at" && key != "profiles" && key != "session_hosts" && key != "jetbrains" {
+                        if !self.skip_value() { return None; }
+                    } else if key == "profiles" {
+                        self.skip_whitespace();
+                        let val = self.parse_array(true)?;
+                        entries.push((key, val));
+                    } else {
+                        let val = self.parse()?;
+                        entries.push((key, val));
+                    }
+                } else {
+                    if key != "schema" && key != "id" && key != "created_at" && key != "origin" && key != "jetbrains" {
+                        if !self.skip_value() { return None; }
+                    } else {
+                        let val = self.parse()?;
+                        entries.push((key, val));
+                    }
+                }
+            } else if is_preview && key == "files" {
+                if !self.skip_value() { return None; }
+            } else {
+                let val = self.parse()?;
+                entries.push((key, val));
+            }
+            self.skip_whitespace();
+            match self.peek()? {
+                b',' => {
+                    self.bump();
+                    self.skip_whitespace();
+                }
+                b'}' => {
+                    self.bump();
+                    break;
+                }
+                _ => return None,
+            }
+        }
+        Some(JsonValue::Object(entries))
+    }
+}
+
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = y - if m <= 2 { 1 } else { 0 };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u32;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy as u32;
+    era * 146097 + doe as i64 - 719468
+}
+
+fn parse_iso_datetime(s: &str) -> Option<f64> {
+    if s.len() < 19 {
+        return None;
+    }
+    let parts: Vec<&str> = s.split('T').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let date_parts: Vec<&str> = parts[0].split('-').collect();
+    if date_parts.len() != 3 {
+        return None;
+    }
+    let year: i64 = date_parts[0].parse().ok()?;
+    let month: i64 = date_parts[1].parse().ok()?;
+    let day: i64 = date_parts[2].parse().ok()?;
+
+    let time_str = parts[1];
+    let (time_main, tz_offset) = if time_str.ends_with('Z') {
+        (&time_str[..time_str.len() - 1], 0i64)
+    } else if let Some(idx) = time_str.rfind('+') {
+        let (tm, tz) = time_str.split_at(idx);
+        let tz_parts: Vec<&str> = tz[1..].split(':').collect();
+        if tz_parts.len() != 2 { return None; }
+        let h: i64 = tz_parts[0].parse().ok()?;
+        let m: i64 = tz_parts[1].parse().ok()?;
+        (tm, h * 3600 + m * 60)
+    } else if let Some(idx) = time_str.rfind('-') {
+        let (tm, tz) = time_str.split_at(idx);
+        if tm.contains(':') {
+            let tz_parts: Vec<&str> = tz[1..].split(':').collect();
+            if tz_parts.len() != 2 { return None; }
+            let h: i64 = tz_parts[0].parse().ok()?;
+            let m: i64 = tz_parts[1].parse().ok()?;
+            (tm, -(h * 3600 + m * 60))
+        } else {
+            return None;
+        }
+    } else {
+        return None;
+    };
+
+    let tm_parts: Vec<&str> = time_main.split(':').collect();
+    if tm_parts.len() != 3 {
+        return None;
+    }
+    let hour: i64 = tm_parts[0].parse().ok()?;
+    let min: i64 = tm_parts[1].parse().ok()?;
+    let (sec, frac) = if let Some(dot_idx) = tm_parts[2].find('.') {
+        let s: i64 = tm_parts[2][..dot_idx].parse().ok()?;
+        let frac_str = &tm_parts[2][dot_idx + 1..];
+        let mut frac_val = 0.0f64;
+        let mut div = 10.0f64;
+        for c in frac_str.chars() {
+            if let Some(d) = c.to_digit(10) {
+                frac_val += (d as f64) / div;
+                div *= 10.0;
+            }
+        }
+        (s, frac_val)
+    } else {
+        let s: i64 = tm_parts[2].parse().ok()?;
+        (s, 0.0f64)
+    };
+
+    let days = days_from_civil(year, month, day);
+    let epoch_secs = days * 86400 + hour * 3600 + min * 60 + sec - tz_offset;
+    Some(epoch_secs as f64 + frac)
+}
+
+#[derive(Debug, Clone)]
+struct HistoricalRecord {
+    provider: String,
+    pid: i64,
+    start_ticks: String,
+    ide_pid: i64,
+    cwd: Option<String>,
+    terminal: Option<String>,
+    first_snapshot: String,
+    last_snapshot: String,
+    observations: usize,
+}
+
+struct ProcessHealthResult {
+    dir_name: String,
+    created_ts: f64,
+    obs: Vec<((Option<String>, i64, String, i64), HistoricalRecord)>,
+}
+
+fn process_health_dir(root: &Path, dir_name: &str, now_ts: f64) -> Result<ProcessHealthResult, ()> {
+    let dir_path = root.join(dir_name);
+    let manifest_path = dir_path.join("manifest.json");
+    let sha_path = dir_path.join("manifest.sha256");
+
+    let c_path = CString::new(manifest_path.as_os_str().as_bytes()).map_err(|_| ())?;
+    let fd = unsafe { openat(-100, c_path.as_ptr(), 0 | NOFOLLOW | CLOEXEC) };
+    if fd < 0 {
+        return Err(());
+    }
+    let mut file = unsafe { File::from_raw_fd(fd) };
+    let meta = file.metadata().map_err(|_| ())?;
+    if !meta.is_file() || meta.len() > 32 * 1024 * 1024 {
+        return Err(());
+    }
+    let mut raw = Vec::with_capacity(meta.len() as usize);
+    file.read_to_end(&mut raw).map_err(|_| ())?;
+
+    let calc_hash = sha256_digest(&raw).ok_or(())?;
+    let expected_hash = fs::read_to_string(&sha_path).map_err(|_| ())?.trim().to_lowercase();
+    if calc_hash != expected_hash {
+        return Err(());
+    }
+
+    let raw_str = std::str::from_utf8(&raw).map_err(|_| ())?;
+    let mut parser = JsonParser::new(raw_str);
+    let data = parser.parse_manifest_health().ok_or(())?;
+
+    if data.get("schema").and_then(|v| v.as_str()) != Some("uncrash.snapshot/v1") {
+        return Err(());
+    }
+    if data.get("id").and_then(|v| v.as_str()) != Some(dir_name) {
+        return Err(());
+    }
+
+    let created_str = data.get("created_at").and_then(|v| v.as_str()).ok_or(())?;
+    let created_ts = parse_iso_datetime(created_str).ok_or(())?;
+    if created_ts > now_ts {
+        return Err(());
+    }
+
+    let mut obs = Vec::new();
+    let providers: HashSet<&'static str> = HashSet::from(["codex", "claude", "agy"]);
+
+    if let Some(jb) = data.get("jetbrains") {
+        let mut roots = HashSet::new();
+        if let Some(procs) = jb.get("processes").and_then(|v| v.as_array()) {
+            for proc in procs {
+                if proc.get("root_ide_candidate").and_then(|v| v.as_bool()) == Some(true) {
+                    if let Some(pid) = proc.get("pid").and_then(|v| v.as_i64()) {
+                        roots.insert(pid);
+                    }
+                }
+            }
+        }
+
+        let mut descendants_map: HashMap<i64, (i64, String, String, Option<String>, Option<String>)> = HashMap::new();
+        if let Some(descendants) = jb.get("descendants").and_then(|v| v.as_array()) {
+            for row in descendants {
+                let pid = match row.get("pid").and_then(|v| v.as_i64()) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let ppid = match row.get("ppid").and_then(|v| v.as_i64()) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let name = match row.get("name").and_then(|v| v.as_str()) {
+                    Some(n) => n.to_string(),
+                    None => continue,
+                };
+                let start_ticks = match row.get("start_ticks") {
+                    Some(JsonValue::String(s)) => s.clone(),
+                    Some(JsonValue::Number(n)) => (*n as i64).to_string(),
+                    _ => continue,
+                };
+                let cwd = row.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let terminal = row.get("terminal").and_then(|v| v.as_str()).map(|s| s.to_string());
+                descendants_map.insert(pid, (ppid, name, start_ticks, cwd, terminal));
+            }
+
+            let origin = data.get("origin").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+            for (&pid, (ppid, name, start_ticks, cwd, terminal)) in &descendants_map {
+                if !providers.contains(name.as_str()) {
+                    continue;
+                }
+                let mut cursor = *ppid;
+                let mut seen = HashSet::new();
+                seen.insert(pid);
+                while let Some(parent) = descendants_map.get(&cursor) {
+                    if seen.contains(&cursor) {
+                        break;
+                    }
+                    seen.insert(cursor);
+                    if roots.contains(&cursor) {
+                        break;
+                    }
+                    cursor = parent.0;
+                }
+                if !roots.contains(&cursor) {
+                    continue;
+                }
+                let ide_pid = cursor;
+                let key = (origin.clone(), pid, start_ticks.clone(), ide_pid);
+                obs.push((key, HistoricalRecord {
+                    provider: name.clone(),
+                    pid,
+                    start_ticks: start_ticks.clone(),
+                    ide_pid,
+                    cwd: cwd.clone(),
+                    terminal: terminal.clone(),
+                    first_snapshot: dir_name.to_string(),
+                    last_snapshot: dir_name.to_string(),
+                    observations: 1,
+                }));
+            }
+        }
+    }
+
+    Ok(ProcessHealthResult {
+        dir_name: dir_name.to_string(),
+        created_ts,
+        obs,
+    })
+}
+
+fn snapshot_health(state_dir: &Path, interval: u64, now_ts: f64) -> Result<String, ()> {
+    let root = state_dir.join("snapshots");
+    if let Ok(meta) = fs::symlink_metadata(&root) {
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            return Ok("{\"verified_plain_manifests\":0,\"invalid_manifests\":0,\"latest_snapshot\":null,\"age_seconds\":null,\"stale\":true,\"freshness\":\"verified-plaintext-manifest\",\"stale_threshold_seconds\":600,\"payload_hashes_verified\":false,\"encrypted_manifests\":\"not-inspected\",\"encrypted_manifest_count\":0,\"historical_ide_provider_observations\":[]}".to_string());
+        }
+    } else {
+        return Ok("{\"verified_plain_manifests\":0,\"invalid_manifests\":0,\"latest_snapshot\":null,\"age_seconds\":null,\"stale\":true,\"freshness\":\"verified-plaintext-manifest\",\"stale_threshold_seconds\":600,\"payload_hashes_verified\":false,\"encrypted_manifests\":\"not-inspected\",\"encrypted_manifest_count\":0,\"historical_ide_provider_observations\":[]}".to_string());
+    }
+
+    let entries = match fs::read_dir(&root) {
+        Ok(e) => e,
+        Err(_) => return Err(()),
+    };
+
+    let mut dir_names: Vec<String> = Vec::new();
+    let mut encrypted = Vec::new();
+
+    for entry in entries {
+        if let Ok(e) = entry {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !name.starts_with('.') {
+                let dir_p = root.join(&name);
+                if !dir_p.join("manifest.json").exists() {
+                    if dir_p.join("manifest.enc").is_file() {
+                        encrypted.push(name);
+                    }
+                } else {
+                    dir_names.push(name);
+                }
+            }
+        }
+    }
+    dir_names.sort();
+
+    let num_threads = 8.min(dir_names.len().max(1));
+    let chunk_size = (dir_names.len() + num_threads - 1) / num_threads;
+
+    let root_arc = Arc::new(root);
+    let mut handles = Vec::new();
+
+    for chunk in dir_names.chunks(chunk_size) {
+        let chunk_vec = chunk.to_vec();
+        let r_arc = root_arc.clone();
+        handles.push(thread::spawn(move || {
+            let mut results = Vec::new();
+            for name in chunk_vec {
+                let res = process_health_dir(&r_arc, &name, now_ts);
+                results.push((name, res));
+            }
+            results
+        }));
+    }
+
+    let mut snapshots: Vec<(f64, String)> = Vec::new();
+    let mut invalid = 0usize;
+    let mut historical: HashMap<(Option<String>, i64, String, i64), HistoricalRecord> = HashMap::new();
+
+    for handle in handles {
+        if let Ok(results) = handle.join() {
+            for (_name, res) in results {
+                match res {
+                    Ok(p) => {
+                        snapshots.push((p.created_ts, p.dir_name));
+                        for (key, rec) in p.obs {
+                            let entry = historical.entry(key).or_insert_with(|| HistoricalRecord {
+                                provider: rec.provider,
+                                pid: rec.pid,
+                                start_ticks: rec.start_ticks,
+                                ide_pid: rec.ide_pid,
+                                cwd: rec.cwd,
+                                terminal: rec.terminal,
+                                first_snapshot: rec.first_snapshot.clone(),
+                                last_snapshot: rec.last_snapshot.clone(),
+                                observations: 0,
+                            });
+                            entry.last_snapshot = rec.last_snapshot;
+                            entry.observations += 1;
+                        }
+                    }
+                    Err(_) => {
+                        invalid += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    let newest = snapshots.iter().max_by(|a, b| {
+        a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.1.cmp(&b.1))
+    });
+    let age = newest.map(|n| now_ts - n.0);
+    let max_encrypted = encrypted.iter().max();
+    let newer_encrypted = !encrypted.is_empty() && match (max_encrypted, newest) {
+        (Some(_e), None) => true,
+        (Some(e), Some(n)) => e.as_str() > n.1.as_str(),
+        _ => false,
+    };
+    let stale = if newer_encrypted {
+        "null".to_string()
+    } else if let Some(a) = age {
+        (a > (2 * interval) as f64).to_string()
+    } else {
+        "true".to_string()
+    };
+
+    let freshness = if newer_encrypted {
+        "\"unknown-encrypted\""
+    } else {
+        "\"verified-plaintext-manifest\""
+    };
+
+    let latest_snapshot_str = match newest {
+        Some(n) => format!("\"{}\"", json_escape(&n.1)),
+        None => "null".to_string(),
+    };
+    let age_str = match age {
+        Some(a) => format!("{:.1}", (a * 10.0).round() / 10.0),
+        None => "null".to_string(),
+    };
+
+    let mut hist_list = Vec::new();
+    for rec in historical.values() {
+        let cwd_str = match &rec.cwd {
+            Some(c) => format!("\"{}\"", json_escape(c)),
+            None => "null".to_string(),
+        };
+        let term_str = match &rec.terminal {
+            Some(t) => format!("\"{}\"", json_escape(t)),
+            None => "null".to_string(),
+        };
+        hist_list.push(format!(
+            "{{\"provider\":\"{}\",\"pid\":{},\"start_ticks\":\"{}\",\"ide_pid\":{},\"cwd\":{},\"terminal\":{},\"first_snapshot\":\"{}\",\"conversation_id\":null,\"boot_id\":null,\"observations\":{},\"last_snapshot\":\"{}\"}}",
+            json_escape(&rec.provider),
+            rec.pid,
+            json_escape(&rec.start_ticks),
+            rec.ide_pid,
+            cwd_str,
+            term_str,
+            json_escape(&rec.first_snapshot),
+            rec.observations,
+            json_escape(&rec.last_snapshot)
+        ));
+    }
+
+    Ok(format!(
+        "{{\"verified_plain_manifests\":{},\"invalid_manifests\":{},\"latest_snapshot\":{},\"age_seconds\":{},\"stale\":{},\"freshness\":{},\"stale_threshold_seconds\":{},\"payload_hashes_verified\":false,\"encrypted_manifests\":\"not-inspected\",\"encrypted_manifest_count\":{},\"historical_ide_provider_observations\":[{}]}}",
+        snapshots.len(),
+        invalid,
+        latest_snapshot_str,
+        age_str,
+        stale,
+        freshness,
+        2 * interval,
+        encrypted.len(),
+        hist_list.join(",")
+    ))
+}
+
+#[derive(Debug, Clone)]
+struct SnapshotSummary {
+    id: String,
+    created_at: Option<String>,
+    profiles: Vec<String>,
+    terminal_tabs_count: usize,
+    gui_projects_count: usize,
+    error: Option<String>,
+}
+
+fn process_preview_dir(root: &Path, dir_name: &str) -> SnapshotSummary {
+    let dir_path = root.join(dir_name);
+    let manifest_path = dir_path.join("manifest.json");
+    let sha_path = dir_path.join("manifest.sha256");
+
+    let err_unreadable = || SnapshotSummary {
+        id: dir_name.to_string(),
+        created_at: None,
+        profiles: Vec::new(),
+        terminal_tabs_count: 0,
+        gui_projects_count: 0,
+        error: Some("unreadable".to_string()),
+    };
+
+    let c_path = match CString::new(manifest_path.as_os_str().as_bytes()) {
+        Ok(c) => c,
+        Err(_) => return err_unreadable(),
+    };
+    let fd = unsafe { openat(-100, c_path.as_ptr(), 0 | NOFOLLOW | CLOEXEC) };
+    if fd < 0 {
+        return err_unreadable();
+    }
+    let mut file = unsafe { File::from_raw_fd(fd) };
+    let meta = match file.metadata() {
+        Ok(m) => m,
+        Err(_) => return err_unreadable(),
+    };
+    if !meta.is_file() || meta.len() > 32 * 1024 * 1024 {
+        return err_unreadable();
+    }
+    let mut raw = Vec::with_capacity(meta.len() as usize);
+    if file.read_to_end(&mut raw).is_err() {
+        return err_unreadable();
+    }
+
+    let calc_hash = match sha256_digest(&raw) {
+        Some(h) => h,
+        None => return err_unreadable(),
+    };
+    let expected_hash = match fs::read_to_string(&sha_path) {
+        Ok(s) => s.trim().to_lowercase(),
+        Err(_) => return err_unreadable(),
+    };
+    if calc_hash != expected_hash {
+        return err_unreadable();
+    }
+
+    let raw_str = match std::str::from_utf8(&raw) {
+        Ok(s) => s,
+        Err(_) => return err_unreadable(),
+    };
+    let mut parser = JsonParser::new(raw_str);
+    let data = match parser.parse_manifest_preview() {
+        Some(d) => d,
+        None => return err_unreadable(),
+    };
+
+    let id = data.get("id").and_then(|v| v.as_str()).unwrap_or(dir_name).to_string();
+    let created_at = data.get("created_at").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+    let mut profiles = Vec::new();
+    if let Some(profs) = data.get("profiles").and_then(|v| v.as_array()) {
+        for p in profs {
+            if let Some(pid) = p.get("id").and_then(|v| v.as_str()) {
+                profiles.push(pid.to_string());
+            }
+        }
+    }
+
+    let mut seen_tabs = HashSet::new();
+    if let Some(sh) = data.get("session_hosts") {
+        if let Some(processes) = sh.get("processes").and_then(|v| v.as_array()) {
+            for p in processes {
+                let role = p.get("role").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let provider = p.get("provider").and_then(|v| v.as_str());
+                let terminal = p.get("terminal").and_then(|v| v.as_str());
+                let cwd = p.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
+                let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("terminal");
+
+                let is_client = (role == "client" || role == "unknown")
+                    && (terminal.is_some() || matches!(provider, Some("codex") | Some("agy") | Some("claude")));
+                if is_client {
+                    let tab_key = (
+                        provider.unwrap_or(name).to_string(),
+                        cwd.to_string(),
+                        terminal.map(|s| s.to_string()),
+                    );
+                    seen_tabs.insert(tab_key);
+                }
+            }
+        }
+    }
+
+    if let Some(jb) = data.get("jetbrains") {
+        if let Some(descendants) = jb.get("descendants").and_then(|v| v.as_array()) {
+            for d in descendants {
+                let term = d.get("terminal").and_then(|v| v.as_str());
+                let cwd = d.get("cwd").and_then(|v| v.as_str());
+                if let (Some(term), Some(cwd)) = (term, cwd) {
+                    let tab_key = (
+                        "jetbrains-terminal".to_string(),
+                        cwd.to_string(),
+                        Some(term.to_string()),
+                    );
+                    seen_tabs.insert(tab_key);
+                }
+            }
+        }
+    }
+    let terminal_tabs_count = seen_tabs.len();
+
+    let mut projects = HashSet::new();
+    if let Some(jb) = data.get("jetbrains") {
+        if let Some(open) = jb.get("open_projects").and_then(|v| v.as_array()) {
+            for p in open {
+                if let Some(s) = p.as_str() {
+                    projects.insert(s.to_string());
+                }
+            }
+        }
+        if let Some(closed) = jb.get("closed_projects").and_then(|v| v.as_array()) {
+            for p in closed {
+                if let Some(s) = p.as_str() {
+                    projects.insert(s.to_string());
+                }
+            }
+        }
+    }
+    let gui_projects_count = projects.len();
+
+    SnapshotSummary {
+        id,
+        created_at,
+        profiles,
+        terminal_tabs_count,
+        gui_projects_count,
+        error: None,
+    }
+}
+
+fn list_snapshots(state_dir: &Path) -> Result<String, ()> {
+    let root = state_dir.join("snapshots");
+    let entries = match fs::read_dir(&root) {
+        Ok(e) => e,
+        Err(_) => return Ok("[]".to_string()),
+    };
+
+    let mut valid_dirs = Vec::new();
+    for entry in entries {
+        if let Ok(e) = entry {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !name.starts_with('.') {
+                let dir_p = root.join(&name);
+                if dir_p.is_dir() {
+                    let has_enc = dir_p.join("manifest.enc").is_file();
+                    let has_json = dir_p.join("manifest.json").is_file() && dir_p.join("manifest.sha256").is_file();
+                    if has_enc || has_json {
+                        valid_dirs.push(name);
+                    }
+                }
+            }
+        }
+    }
+    valid_dirs.sort();
+    valid_dirs.reverse();
+
+    let num_threads = 8.min(valid_dirs.len().max(1));
+    let chunk_size = (valid_dirs.len() + num_threads - 1) / num_threads;
+
+    let root_arc = Arc::new(root);
+    let mut handles = Vec::new();
+
+    for chunk in valid_dirs.chunks(chunk_size) {
+        let chunk_vec = chunk.to_vec();
+        let r_arc = root_arc.clone();
+        handles.push(thread::spawn(move || {
+            let mut results = Vec::new();
+            for name in chunk_vec {
+                let dir_p = r_arc.join(&name);
+                if dir_p.join("manifest.enc").is_file() && !dir_p.join("manifest.json").is_file() {
+                    results.push(SnapshotSummary {
+                        id: name,
+                        created_at: None,
+                        profiles: Vec::new(),
+                        terminal_tabs_count: 0,
+                        gui_projects_count: 0,
+                        error: Some("unreadable".to_string()),
+                    });
+                } else {
+                    results.push(process_preview_dir(&r_arc, &name));
+                }
+            }
+            results
+        }));
+    }
+
+    let mut all_summaries = Vec::new();
+    for handle in handles {
+        if let Ok(results) = handle.join() {
+            all_summaries.extend(results);
+        }
+    }
+
+    let mut json_items = Vec::new();
+    for s in all_summaries {
+        if let Some(err) = s.error {
+            json_items.push(format!(
+                "{{\"id\":\"{}\",\"error\":\"{}\"}}",
+                json_escape(&s.id),
+                json_escape(&err)
+            ));
+        } else {
+            let prof_json: Vec<String> = s.profiles.iter().map(|p| format!("\"{}\"", json_escape(p))).collect();
+            let created_json = match &s.created_at {
+                Some(c) => format!("\"{}\"", json_escape(c)),
+                None => "null".to_string(),
+            };
+            json_items.push(format!(
+                "{{\"id\":\"{}\",\"created_at\":{},\"profiles\":[{}],\"terminal_tabs_count\":{},\"gui_projects_count\":{}}}",
+                json_escape(&s.id),
+                created_json,
+                prof_json.join(","),
+                s.terminal_tabs_count,
+                s.gui_projects_count
+            ));
+        }
+    }
+
+    Ok(format!("[{}]", json_items.join(",")))
+}
+
+fn run_snapshot_health(args: &[String]) -> io::Result<()> {
+    if args.is_empty() {
+        return Err(fail());
+    }
+    let state_dir = Path::new(&args[0]);
+    let interval: u64 = if args.len() > 1 {
+        args[1].parse().unwrap_or(300)
+    } else {
+        300
+    };
+    let now_ts = if args.len() > 2 {
+        parse_iso_datetime(&args[2]).unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs_f64()
+        })
+    } else {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()
+    };
+    match snapshot_health(state_dir, interval, now_ts) {
+        Ok(json) => {
+            println!("{json}");
+            Ok(())
+        }
+        Err(_) => Err(fail()),
+    }
+}
+
+fn run_list_snapshots(args: &[String]) -> io::Result<()> {
+    if args.is_empty() {
+        return Err(fail());
+    }
+    let state_dir = Path::new(&args[0]);
+    match list_snapshots(state_dir) {
+        Ok(json) => {
+            println!("{json}");
+            Ok(())
+        }
+        Err(_) => Err(fail()),
+    }
+}
+
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && args[1] == "--scan-panics" {
         return scan_panics(&args[2..]);
+    }
+    if args.len() > 1 && args[1] == "--snapshot-health" {
+        return run_snapshot_health(&args[2..]);
+    }
+    if args.len() > 1 && args[1] == "--list-snapshots" {
+        return run_list_snapshots(&args[2..]);
     }
     let mut input = String::new();
     io::stdin()
@@ -814,3 +1926,4 @@ fn main() -> io::Result<()> {
     }
     Ok(())
 }
+
