@@ -1,0 +1,81 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-014",
+  "summary": "Require executed X11 window preservation validation",
+  "workstream": "application",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "requested"
+  },
+  "allowedPaths": [
+    "project/ticket-014/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "tests/test_window_control.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "a2887cbcc2cf154d5a39c595cd48dedc28bd667c",
+    "targetBranch": "main",
+    "outcome": "Independently publish mandatory actual X11 single-window preservation validation after PR10 merged its silent-return fixture; install the tested merged Uncrash CLI under existing user authorization.",
+    "nonGoals": [
+      "No IDE signals, plugin settings, extra dependencies, check retirement or direct merge",
+      "No changes outside the owned fixture and ticket carriers"
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 20,
+    "budgets": {
+      "maxImplementationFiles": 1,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Require Xlib, Xvfb and Openbox before the actual four-window fixture. Missing dependencies must fail before subprocess launch. Preserve the existing actual close and three-peer assertions. Add three negative dependency regressions and obtain current-base native CI plus trusted exact-head review.",
+      "components": [
+        {
+          "name": "window validation",
+          "paths": [
+            "tests/test_window_control.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Protected follow-up restoring previous fixture from the accepted base; do not rewrite merged history."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "python -m pytest -q"
+        ],
+        "evidence": "Actual close-one-of-four and three missing-dependency negative branches; all product tests."
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "./project/governance-check.sh",
+          "protected native OneDev verification",
+          "independent Validator review and merge"
+        ],
+        "evidence": "All three preserved gates and exact-head trusted publication."
+      }
+    ]
+  }
+}
