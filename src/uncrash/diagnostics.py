@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
+import time
 from urllib.parse import quote
 
 from .store import RecoveryError, no_links, write_file
@@ -122,21 +124,28 @@ def session_hosts(proc_root=Path('/proc')):
 
 
 def check_sqlite_integrity(path: Path) -> tuple[str, str | None]:
-    """Check SQLite integrity using PRAGMA quick_check with read-only URI and timeout."""
-    if not path.is_file():
-        return 'missing', f'File does not exist: {path}'
+    """Bound a read-only integrity check; inaccessible does not mean corrupted."""
     connection = None
     try:
-        connection = sqlite3.connect('file:' + quote(str(no_links(path)), safe='/') + '?mode=ro', uri=True, timeout=1.0)
-        cur = connection.cursor()
-        cur.execute('PRAGMA quick_check;')
-        res = cur.fetchone()
-        if not res or res[0] != 'ok':
-            msg = res[0] if res else 'empty result'
+        path = no_links(path)
+        if not path.exists():
+            return 'missing', f'File does not exist: {path}'
+        if not path.is_file():
+            return 'unavailable', 'SQLite input is not a regular file'
+        deadline = time.monotonic() + 1.0
+        connection = sqlite3.connect('file:' + quote(str(path), safe='/') + '?mode=ro', uri=True, timeout=0.2)
+        connection.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+        rows = connection.execute('PRAGMA quick_check(20)').fetchall()
+        if rows != [('ok',)]:
+            msg = rows[0][0] if rows else 'empty result'
             return 'corrupted', f'quick_check failed: {msg}'
         return 'ok', None
-    except Exception as e:
-        return 'corrupted', str(e)
+    except sqlite3.Error as exc:
+        code = getattr(exc, 'sqlite_errorcode', 0) & 0xff
+        status = 'corrupted' if code in {sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB} else 'unavailable'
+        return status, str(exc)
+    except (OSError, RecoveryError) as exc:
+        return 'unavailable', str(exc)
     finally:
         if connection is not None:
             connection.close()
@@ -144,10 +153,22 @@ def check_sqlite_integrity(path: Path) -> tuple[str, str | None]:
 
 def scan_agent_log_panics(log_dir: Path, max_files: int = 20) -> list[dict]:
     """Scan recent agent log files for unhandled panic/crash signatures."""
-    if not log_dir.is_dir():
+    if not isinstance(max_files, int) or not 1 <= max_files <= 100:
+        raise ValueError('Log file budget must be between 1 and 100')
+    try:
+        log_dir = no_links(log_dir)
+        candidates = []
+        for path in log_dir.glob('*.log'):
+            try:
+                info = no_links(path).stat()
+                if stat.S_ISREG(info.st_mode):
+                    candidates.append((info.st_mtime_ns, path))
+            except (OSError, RecoveryError):
+                continue
+    except (OSError, RecoveryError):
         return []
     panics = []
-    log_files = sorted(log_dir.glob('*.log'), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)[:max_files]
+    log_files = [path for _, path in sorted(candidates, reverse=True)[:max_files]]
     panic_patterns = [
         re.compile(r'Caught panic:\s*(.*)', re.IGNORECASE),
         re.compile(r'runtime error:\s*(invalid memory address or nil pointer dereference.*)', re.IGNORECASE),
@@ -156,8 +177,13 @@ def scan_agent_log_panics(log_dir: Path, max_files: int = 20) -> list[dict]:
     ]
     for log_path in log_files:
         try:
-            with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
-                content = f.read(512 * 1024)
+            fd = os.open(no_links(log_path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, 'rb') as f:
+                info = os.fstat(f.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    continue
+                f.seek(max(0, info.st_size - 512 * 1024))
+                content = f.read(512 * 1024).decode('utf-8', errors='replace')
             for pattern in panic_patterns:
                 match = pattern.search(content)
                 if match:
@@ -168,7 +194,7 @@ def scan_agent_log_panics(log_dir: Path, max_files: int = 20) -> list[dict]:
                         'matched_detail': match.group(1).strip() if match.lastindex else match.group(0).strip(),
                     })
                     break
-        except (OSError, UnicodeError):
+        except (OSError, UnicodeError, RecoveryError):
             continue
     return panics
 
@@ -182,6 +208,7 @@ def check_agent_storage_health(home: Path) -> dict:
         'status': 'HEALTHY',
         'providers': {},
         'corrupted_sessions': [],
+        'unavailable_sessions': [],
         'detected_panics': [],
     }
 
@@ -189,6 +216,7 @@ def check_agent_storage_health(home: Path) -> dict:
     agy_root = home / '.gemini/antigravity-cli'
     if agy_root.is_dir():
         corrupt_dbs = []
+        unavailable_dbs = []
         checked_count = 0
         conv_dir = agy_root / 'conversations'
         if conv_dir.is_dir():
@@ -196,12 +224,12 @@ def check_agent_storage_health(home: Path) -> dict:
                 checked_count += 1
                 status, err = check_sqlite_integrity(db_path)
                 if status != 'ok':
-                    corrupt_dbs.append({
+                    (corrupt_dbs if status == 'corrupted' else unavailable_dbs).append({
                         'provider': 'agy',
                         'session_id': db_path.stem,
                         'path': str(db_path),
                         'error': err or 'unknown integrity failure',
-                        'remediation': f'sqlite3 {db_path} .dump > dump.sql && sqlite3 restored.db < dump.sql',
+                        'remediation': 'Preserve the source; recover to a new private path only after verifying an offline or consistent snapshot.' if status == 'corrupted' else 'Retry the read-only check when the database is accessible.',
                     })
 
         summary_db = agy_root / 'conversation_summaries.db'
@@ -210,12 +238,12 @@ def check_agent_storage_health(home: Path) -> dict:
             s_status, s_err = check_sqlite_integrity(summary_db)
             summary_status = s_status
             if s_status != 'ok':
-                corrupt_dbs.append({
+                (corrupt_dbs if s_status == 'corrupted' else unavailable_dbs).append({
                     'provider': 'agy',
                     'session_id': 'conversation_summaries',
                     'path': str(summary_db),
                     'error': s_err or 'summary database malformed',
-                    'remediation': 'restore from SQLite dump or regenerate summaries',
+                    'remediation': 'Preserve the source and verify recovery to a new private path.' if s_status == 'corrupted' else 'Retry when the database is accessible.',
                 })
 
         panics = scan_agent_log_panics(agy_root / 'log')
@@ -224,14 +252,16 @@ def check_agent_storage_health(home: Path) -> dict:
             'checked_sessions': checked_count,
             'summary_integrity': summary_status,
             'corrupted_count': len(corrupt_dbs),
+            'unavailable_count': len(unavailable_dbs),
             'panic_count': len(panics),
         }
         report['corrupted_sessions'].extend(corrupt_dbs)
+        report['unavailable_sessions'].extend(unavailable_dbs)
         report['detected_panics'].extend(panics)
 
     if report['corrupted_sessions']:
         report['status'] = 'CORRUPTED'
-    elif report['detected_panics']:
+    elif report['detected_panics'] or report['unavailable_sessions']:
         report['status'] = 'DEGRADED'
 
     return report
@@ -256,6 +286,7 @@ def provider_inventory(home, check_integrity=False):
     root = no_links(home / '.gemini/antigravity-cli'); db_files = {p.stem for p in (root / 'conversations').glob('*.db')}
     summary = root / 'conversation_summaries.db'; connection = None
     corrupted_dbs = []
+    unavailable_dbs = []
     try:
         connection = sqlite3.connect('file:' + quote(str(no_links(summary)), safe='/') + '?mode=ro', uri=True, timeout=1)
         rows = [r[0] for r in connection.execute('SELECT conversation_id FROM conversation_summaries')]
@@ -264,14 +295,15 @@ def provider_inventory(home, check_integrity=False):
             for db_file in (root / 'conversations').glob('*.db'):
                 st, err = check_sqlite_integrity(db_file)
                 if st != 'ok':
-                    corrupted_dbs.append({'id': db_file.stem, 'error': err})
-            integrity_status = 'corrupted' if corrupted_dbs else 'ok'
+                    (corrupted_dbs if st == 'corrupted' else unavailable_dbs).append({'id': db_file.stem, 'error': err})
+            integrity_status = 'corrupted' if corrupted_dbs else 'unavailable' if unavailable_dbs else 'ok'
         else:
             integrity_status = 'not-checked'
         result['agy'] = {'summary_rows': len(rows), 'unique_summary_ids': len(valid), 'db_files': len(db_files),
             'summary_with_file': len(valid & db_files), 'summary_without_file': len(valid - db_files),
             'file_without_summary': len(db_files - valid), 'host_binding': 'not-present',
-            'database_integrity': integrity_status, 'corrupted_sessions': corrupted_dbs, 'resume_verified': False}
+            'database_integrity': integrity_status, 'corrupted_sessions': corrupted_dbs,
+            'unavailable_sessions': unavailable_dbs, 'resume_verified': False}
     except (OSError, sqlite3.Error, RecoveryError):
         result['agy'] = {'db_files': len(db_files), 'summary_status': 'unavailable', 'database_integrity': 'unavailable'}
     finally:

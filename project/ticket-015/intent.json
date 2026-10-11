@@ -1,0 +1,94 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-015",
+  "summary": "Preserve session databases and verify salvage outcomes",
+  "workstream": "application",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-015/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/diagnostics.py",
+    "src/uncrash/recovery.py",
+    "tests/test_diagnostics.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "7fa40a5c3da0710f10f581f70aa0291dfd5bc248",
+    "targetBranch": "main",
+    "outcome": "Correct the four reproduced session-storage failures from merged PR13, pass regression and full product tests, then publish through protected independent validation.",
+    "nonGoals": [
+      "No changes to other repositories or protected review policy",
+      "No repair of real user session databases or IDE restart",
+      "No deletion of peer worktrees or data"
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 60,
+    "budgets": {
+      "maxImplementationFiles": 3,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Keep the existing diagnostic and salvage entry points; use bounded read-only SQLite diagnostics, private exclusive recovery staging and verified publication, and recent bounded log tails.",
+      "components": [
+        {
+          "name": "session-storage",
+          "paths": [
+            "src/uncrash/diagnostics.py",
+            "src/uncrash/recovery.py",
+            "tests/test_diagnostics.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Protected follow-up reverting this implementation; preserve all quarantined source copies."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "python -m pytest tests/test_diagnostics.py -q"
+        ],
+        "evidence": "Recovery refuses overwrite, validates import and output integrity, preserves source bytes and private quarantine; failures never publish a recovered output."
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "python -m pytest tests/test_diagnostics.py -q"
+        ],
+        "evidence": "Locked or inaccessible SQLite inputs produce unavailable/degraded diagnostics, not corruption; recent panic signatures in large logs are detected."
+      },
+      {
+        "criterion": "AC-03",
+        "commands": [
+          "python -m pytest -q",
+          "./project/governance-check.sh",
+          "protected native OneDev verification",
+          "independent Validator exact-head review and merge"
+        ],
+        "evidence": "Focused regressions, full suite, actual native X11 fixture and protected gates pass."
+      }
+    ]
+  }
+}

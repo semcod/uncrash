@@ -233,14 +233,47 @@ def test_salvage_agent_session_db(tmp_path):
     with sqlite3.connect(src) as c:
         c.execute('CREATE TABLE steps (idx INT PRIMARY KEY, content TEXT);')
         c.execute('INSERT INTO steps VALUES (1, "step one");')
+    src.chmod(0o640)
 
     dest = tmp_path / 'salvaged.db'
     receipt = recovery.salvage_agent_session_db(src, dest)
     assert receipt['status'] == 'COMPLETED'
+    assert receipt['verifiedIntegrity'] == 'ok'
+    assert receipt['salvagedStepCount'] == 1
     assert dest.is_file()
+    assert dest.stat().st_mode & 0o777 == 0o600
+    quarantine = Path(receipt['quarantinedPath'])
+    assert quarantine.is_file()
+    assert quarantine.stat().st_mode & 0o777 == 0o600
+
     with sqlite3.connect(dest) as c:
         cnt = c.execute('SELECT count(*) FROM steps').fetchone()[0]
         assert cnt == 1
+
+
+def test_salvage_agent_session_db_multi_table(tmp_path):
+    src = tmp_path / 'multi_session.db'
+    with sqlite3.connect(src) as c:
+        c.execute('CREATE TABLE steps (id INT, text TEXT);')
+        c.execute('INSERT INTO steps VALUES (1, "s1"), (2, "s2"), (3, "s3");')
+        c.execute('CREATE TABLE messages (id INT, role TEXT);')
+        c.execute('INSERT INTO messages VALUES (1, "user"), (2, "assistant");')
+
+    dest = tmp_path / 'salvaged_multi.db'
+    receipt = recovery.salvage_agent_session_db(src, dest)
+    assert receipt['status'] == 'COMPLETED'
+    assert receipt['verifiedIntegrity'] == 'ok'
+    assert receipt['salvagedStepCount'] == 5
+
+
+def test_salvage_agent_session_db_non_sqlite_input(tmp_path):
+    src = tmp_path / 'garbage.db'
+    src.write_bytes(b'non-sqlite random text that cannot be dumped\n')
+    dest = tmp_path / 'salvaged_garbage.db'
+
+    receipt = recovery.salvage_agent_session_db(src, dest)
+    assert receipt['status'] == 'FAILED'
+
 
 
 def test_diagnose_includes_agent_health_and_session_corruption_findings(tmp_path):
@@ -264,5 +297,162 @@ def test_diagnose_includes_agent_health_and_session_corruption_findings(tmp_path
     assert report['agent_health']['status'] == 'CORRUPTED'
     assert 'UNCRASH-SESSION-STORAGE-CORRUPTED' in report['findings']
     assert 'UNCRASH-AGENT-PANIC-DETECTED' in report['findings']
+
+
+def _session_database(path):
+    with sqlite3.connect(path) as connection:
+        connection.execute('CREATE TABLE steps(id INTEGER)')
+        connection.execute('INSERT INTO steps VALUES(7)')
+    return path
+
+
+def test_salvage_refuses_existing_output_and_same_input(tmp_path):
+    source = _session_database(tmp_path / 'source.db')
+    original = source.read_bytes()
+    output = tmp_path / 'existing.db'
+    output.write_bytes(b'OWNER DATA')
+    for target in (output, source):
+        with pytest.raises(RecoveryError, match='already exists'):
+            recovery.salvage_agent_session_db(source, target)
+    assert output.read_bytes() == b'OWNER DATA' and source.read_bytes() == original
+
+
+def test_salvage_preserves_private_source_copy_and_verified_steps(tmp_path, monkeypatch):
+    import hashlib
+    import stat
+    source = _session_database(tmp_path / 'source.db')
+    original = source.read_bytes()
+    monkeypatch.setattr(recovery.subprocess, 'run', lambda *a, **k: pytest.fail('External SQLite CLI is unnecessary'))
+    output = tmp_path / 'output.db'
+    result = recovery.salvage_agent_session_db(source, output)
+    quarantined = Path(result['quarantinedPath'])
+    assert result['status'] == 'COMPLETED' and result['salvagedStepCount'] == 1
+    assert source.read_bytes() == quarantined.read_bytes() == original
+    assert result['originalSha256'] == hashlib.sha256(original).hexdigest()
+    assert result['recoveredSha256'] == hashlib.sha256(output.read_bytes()).hexdigest()
+    assert stat.S_IMODE(quarantined.stat().st_mode) == stat.S_IMODE(output.stat().st_mode) == 0o600
+    assert stat.S_IMODE(quarantined.parent.stat().st_mode) == 0o700
+    assert not list(tmp_path.glob('uncrash-session-staging-*'))
+
+
+def test_salvage_failed_sql_import_preserves_source_and_does_not_publish(tmp_path, monkeypatch):
+    source = _session_database(tmp_path / 'source.db')
+    original = source.read_bytes()
+    real_connect = sqlite3.connect
+
+    class FailedImport(sqlite3.Connection):
+        def execute(self, sql, *args):
+            if sql.startswith('INSERT INTO'):
+                raise sqlite3.OperationalError('injected import failure')
+            return super().execute(sql, *args)
+
+    def connect(path, **kwargs):
+        if isinstance(path, Path):
+            kwargs['factory'] = FailedImport
+        return real_connect(path, **kwargs)
+
+    monkeypatch.setattr(sqlite3, 'connect', connect)
+    output = tmp_path / 'failed.db'
+    result = recovery.salvage_agent_session_db(source, output)
+    assert result['status'] == 'FAILED' and result['salvagedStepCount'] == 0
+    assert not output.exists() and source.read_bytes() == original
+    assert Path(result['quarantinedPath']).read_bytes() == original
+    assert not list(tmp_path.glob('uncrash-session-staging-*'))
+
+
+def test_salvage_corrupt_source_never_claims_empty_recovery_success(tmp_path):
+    source = tmp_path / 'broken.db'
+    source.write_bytes(b'SQLite format 3\0' + b'\xff' * 100)
+    output = tmp_path / 'output.db'
+    result = recovery.salvage_agent_session_db(source, output)
+    assert result['status'] == 'FAILED' and not output.exists()
+    assert result['recoveredSha256'] == '0' * 64
+    assert Path(result['quarantinedPath']).read_bytes() == source.read_bytes()
+
+
+def test_salvage_does_not_overwrite_output_created_during_recovery(tmp_path, monkeypatch):
+    source = _session_database(tmp_path / 'source.db')
+    output = tmp_path / 'output.db'
+    real_link = recovery.os.link
+
+    def competing_link(src, dst, **kwargs):
+        output.write_bytes(b'OTHER WRITER')
+        return real_link(src, dst, **kwargs)
+
+    monkeypatch.setattr(recovery.os, 'link', competing_link)
+    result = recovery.salvage_agent_session_db(source, output)
+    assert result['status'] == 'FAILED' and output.read_bytes() == b'OTHER WRITER'
+
+
+def test_salvage_refuses_live_wal_instead_of_losing_committed_rows(tmp_path):
+    source = tmp_path / 'live.db'
+    connection = sqlite3.connect(source)
+    try:
+        connection.execute('PRAGMA journal_mode=WAL')
+        connection.execute('CREATE TABLE steps(id INTEGER)')
+        connection.execute('INSERT INTO steps VALUES(7)')
+        connection.commit()
+        with pytest.raises(RecoveryError, match='consistent snapshot'):
+            recovery.salvage_agent_session_db(source, tmp_path / 'output.db')
+        assert connection.execute('SELECT id FROM steps').fetchall() == [(7,)]
+        assert not (tmp_path / 'output.db').exists()
+    finally:
+        connection.close()
+
+
+def test_salvage_refuses_symlink_source_and_destination(tmp_path):
+    source = _session_database(tmp_path / 'source.db')
+    alias = tmp_path / 'alias.db'
+    alias.symlink_to(source)
+    for src, dst in ((alias, tmp_path / 'output.db'), (source, alias)):
+        with pytest.raises(RecoveryError, match='Symlink'):
+            recovery.salvage_agent_session_db(src, dst)
+    assert alias.is_symlink()
+
+
+def test_locked_session_is_unavailable_and_health_degraded(tmp_path):
+    conversations = tmp_path / '.gemini/antigravity-cli/conversations'
+    conversations.mkdir(parents=True)
+    source = _session_database(conversations / 'locked.db')
+    connection = sqlite3.connect(source)
+    try:
+        connection.execute('BEGIN EXCLUSIVE')
+        assert d.check_sqlite_integrity(source)[0] == 'unavailable'
+        report = d.check_agent_storage_health(tmp_path)
+        assert report['status'] == 'DEGRADED' and not report['corrupted_sessions']
+        assert report['providers']['agy']['unavailable_count'] == 1
+        assert report['unavailable_sessions'][0]['session_id'] == 'locked'
+    finally:
+        connection.rollback(); connection.close()
+
+
+def test_integrity_symlink_and_nonfile_are_unavailable(tmp_path):
+    source = _session_database(tmp_path / 'source.db')
+    alias = tmp_path / 'alias.db'
+    alias.symlink_to(source)
+    assert d.check_sqlite_integrity(alias)[0] == 'unavailable'
+    assert d.check_sqlite_integrity(tmp_path)[0] == 'unavailable'
+    assert d.check_sqlite_integrity(tmp_path / 'missing.db')[0] == 'missing'
+
+
+def test_recent_panic_after_large_log_prefix_is_detected(tmp_path):
+    log = tmp_path / 'session.log'
+    log.write_bytes(b'x' * 600000 + b'\nCaught panic: recent crash\n')
+    results = d.scan_agent_log_panics(tmp_path)
+    assert len(results) == 1 and results[0]['matched_detail'] == 'recent crash'
+
+
+def test_panic_scan_ignores_symlink_and_directory_entries(tmp_path):
+    outside = tmp_path / 'private.txt'
+    outside.write_text('Caught panic: private log')
+    (tmp_path / 'linked.log').symlink_to(outside)
+    (tmp_path / 'directory.log').mkdir()
+    assert d.scan_agent_log_panics(tmp_path) == []
+
+
+def test_panic_scan_rejects_invalid_file_budgets(tmp_path):
+    for budget in (-1, 0, 101):
+        with pytest.raises(ValueError, match='budget'):
+            d.scan_agent_log_panics(tmp_path, budget)
 
 
