@@ -14,7 +14,8 @@ from .contracts import parse_restore_action, process_export
 from .native import discover, selected_config, save_config
 from .runtime import Launcher, recover_at_startup, run_daemon
 from .store import RecoveryError, Store, build_native, no_links, private_dir, profiles, write_file
-from .recovery import (export_bundle, import_bundle, transfer_bundle, jetbrains_state, request_window_close,
+from .window_control import close_one_window, require_process_consent, window_inventory
+from .recovery import (export_bundle, import_bundle, transfer_bundle, jetbrains_state,
                        detected_gui_apps, close_gui_app, find_pycharm_executable, jetbrains_projects, restore_pycharm)
 
 
@@ -115,15 +116,18 @@ def main(argv=None):
     apps_parser.add_argument('--close', nargs='?', const='__default__', help='Close an explicit whole-process PID; requires --start-ticks')
     apps_parser.add_argument('--start-ticks')
     apps_parser.add_argument('--force', action='store_true', help='Force kill if process does not exit promptly')
+    apps_parser.add_argument('--entire-process', action='store_true', help='Explicitly allow closing ALL windows of the selected PID')
     apps_parser.add_argument('--json', action='store_true', help='Output in JSON format')
     close_app_parser = sub.add_parser('close-app', help='Close one explicit application process with PID/start identity')
     close_app_parser.add_argument('target', nargs='?', default=None, help='Explicit PID from apps --json; this closes the whole process')
     close_app_parser.add_argument('--start-ticks')
     close_app_parser.add_argument('--force', action='store_true', help='Force kill if process does not exit promptly')
+    close_app_parser.add_argument('--entire-process', action='store_true', help='Explicitly allow closing ALL windows of the selected PID')
     pycharm_parser = sub.add_parser('pycharm', help='Inspect, close, or restore JetBrains PyCharm projects')
     pycharm_parser.add_argument('action', nargs='?', choices=['status', 'close', 'restore'], default=None, help='Action to perform: status, close, or restore')
     pycharm_parser.add_argument('--restore', '--restore-last', action='store_true', dest='restore', help='Reopen/restore the last closed PyCharm project')
-    pycharm_parser.add_argument('--close', action='store_true', help='Request graceful close of running PyCharm process')
+    pycharm_parser.add_argument('--close', action='store_true', help='Close ALL windows of an explicit PyCharm PID; requires --entire-process')
+    pycharm_parser.add_argument('--entire-process', action='store_true', help='Explicitly allow closing ALL windows of the selected PID')
     pycharm_parser.add_argument('--force', action='store_true', help='Force kill if process does not exit promptly')
     pycharm_parser.add_argument('--project', help='Specific project directory path')
     pycharm_parser.add_argument('--executable', help='Specific PyCharm executable binary path')
@@ -134,6 +138,10 @@ def main(argv=None):
     window.add_argument('--xid', type=lambda v: int(v, 0), required=True)
     window.add_argument('--pid', type=int, required=True)
     window.add_argument('--start-ticks', required=True)
+    window.add_argument('--title', help='Expected exact window title; refuse if it changed')
+    window.add_argument('--wait-seconds', type=float, default=2, help='Verify closure for at most 0..10 seconds; never force quit')
+    window.add_argument('--dry-run', action='store_true', help='Verify the explicit window without requesting a close')
+    sub.add_parser('windows', help='Inspect live window identities; never infer the newest window from PID or focus order')
     bundle = sub.add_parser('bundle-export', help='Export one portable snapshot archive without its encryption key')
     bundle.add_argument('snapshot', nargs='?', default='latest')
     bundle.add_argument('--destination', type=Path, required=True)
@@ -171,7 +179,11 @@ def main(argv=None):
                 return 0
             if is_close:
                 if args.dry_run:
-                    print(json.dumps({'action': 'close-process', 'pid': args.pid, 'start_ticks': args.start_ticks, 'signals_sent': False})); return 0
+                    print(json.dumps({'action': 'close-process', 'pid': args.pid, 'start_ticks': args.start_ticks,
+                                      'scope': 'ALL windows of the selected PID',
+                                      'entire_process_consent': args.entire_process,
+                                      'signals_sent': False})); return 0
+                require_process_consent(args.entire_process)
                 res = close_gui_app(pid=args.pid, name='pycharm', force=args.force, expected_start=args.start_ticks)
                 print(json.dumps(res, ensure_ascii=False, indent=2))
                 return 0
@@ -193,6 +205,7 @@ def main(argv=None):
 
         if args.command == 'apps':
             if args.close:
+                require_process_consent(args.entire_process)
                 target_arg = None if args.close == '__default__' else args.close
                 target_pid = int(target_arg) if target_arg and target_arg.isdigit() else None
                 target_name = target_arg if target_arg and not target_arg.isdigit() else None
@@ -212,13 +225,19 @@ def main(argv=None):
                         print(f"  • PID {a['pid']:<7} | {a['name']:<25} | {a['executable']}{proj}")
             return 0
         if args.command == 'close-app':
+            require_process_consent(args.entire_process)
             target_pid = int(args.target) if args.target and args.target.isdigit() else None
             target_name = args.target if args.target and not args.target.isdigit() else None
             res = close_gui_app(pid=target_pid, name=target_name, force=args.force, expected_start=args.start_ticks)
             print(json.dumps(res, ensure_ascii=False, indent=2))
             return 0
         if args.command == 'window-close':
-            print(json.dumps(request_window_close(args.xid, args.pid, args.start_ticks))); return 0
+            result = close_one_window(args.xid, args.pid, args.start_ticks, title=args.title,
+                                      wait_seconds=args.wait_seconds, dry_run=args.dry_run)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result['status'] in ('closed', 'dry-run') else 1
+        if args.command == 'windows':
+            print(json.dumps(window_inventory(), ensure_ascii=False, indent=2)); return 0
         if args.command == 'bundle-import':
             print(json.dumps(import_bundle(args.source, args.destination), ensure_ascii=False, indent=2)); return 0
         if args.command == 'bundle-transfer':

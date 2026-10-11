@@ -1,0 +1,27 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-012",
+  "summary": "Safe explicit single-window close and whole-process CLI consent",
+  "workstream": "application",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "requested"
+  },
+  "allowedPaths": [
+    "project/ticket-012/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/cli.py",
+    "src/uncrash/window_control.py",
+    "tests/test_window_control.py",
+    "src/uncrash/api.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null
+}
