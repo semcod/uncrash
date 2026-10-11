@@ -501,3 +501,56 @@ def test_panic_scan_rejects_invalid_file_budgets(tmp_path):
             d.scan_agent_log_panics(tmp_path, budget)
 
 
+def test_native_scan_agent_log_panics_matches_python_results(tmp_path):
+    log1 = tmp_path / 'session_1.log'
+    log1.write_text(
+        "I1011 10:00:00 server.go:100 start\n"
+        "Caught panic: runtime error: invalid memory address or nil pointer dereference\n"
+        "I1011 10:00:01 server.go:101 end\n"
+    )
+    log2 = tmp_path / 'session_2.log'
+    log2.write_text(
+        "Failed to load conversation abc-123-def: Error: database disk image is malformed in sqlite\n"
+    )
+    log3 = tmp_path / 'session_3.log'
+    log3.write_text(
+        "program was killed: program experienced a panic due to stack overflow\n"
+    )
+    log4 = tmp_path / 'session_4.log'
+    log4.write_text("All operations completed normally\n")
+
+    native_res = d.native_scan_agent_log_panics(tmp_path, max_files=10)
+    assert native_res is not None
+    assert len(native_res) == 3
+
+    combined_res = d.scan_agent_log_panics(tmp_path, max_files=10)
+    assert combined_res == native_res
+
+    signatures = {r['signature'] for r in native_res}
+    assert any('runtime error' in s for s in signatures)
+    assert any('Failed to load conversation' in s for s in signatures)
+    assert any('program was killed' in s for s in signatures)
+
+
+def test_native_scan_fallback_when_binary_missing(tmp_path, monkeypatch):
+    log = tmp_path / 'fallback.log'
+    log.write_text("Caught panic: fallback test failure\n")
+
+    monkeypatch.setattr(d, 'find_native_worker', lambda *args, **kwargs: None)
+    monkeypatch.setattr('shutil.which', lambda *args, **kwargs: None)
+
+    assert d.native_scan_agent_log_panics(tmp_path) is None
+    results = d.scan_agent_log_panics(tmp_path)
+    assert len(results) == 1
+    assert results[0]['matched_detail'] == 'fallback test failure'
+
+
+def test_find_native_worker_discovery(tmp_path):
+    from uncrash.store import build_native, find_native_worker
+    built = build_native(tmp_path)
+    assert built.is_file()
+    found = find_native_worker(tmp_path)
+    assert found == built
+
+
+

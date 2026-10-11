@@ -10,10 +10,13 @@ from pathlib import Path
 import re
 import sqlite3
 import stat
+import shutil
+import subprocess
+import tempfile
 import time
 from urllib.parse import quote
 
-from .store import RecoveryError, no_links, write_file
+from .store import RecoveryError, build_native, find_native_worker, no_links, write_file
 
 
 PROVIDERS = {'codex', 'claude', 'agy'}
@@ -151,10 +154,42 @@ def check_sqlite_integrity(path: Path) -> tuple[str, str | None]:
             connection.close()
 
 
-def scan_agent_log_panics(log_dir: Path, max_files: int = 20) -> list[dict]:
+def native_scan_agent_log_panics(log_dir: Path, max_files: int = 20, state_root: Path = None) -> list[dict] | None:
+    """Attempt fast native Rust scan of agent logs; returns None if native worker is unavailable."""
+    if not isinstance(max_files, int) or not 1 <= max_files <= 100:
+        raise ValueError('Log file budget must be between 1 and 100')
+    binary = find_native_worker(state_root)
+    if binary is None and shutil.which('rustc'):
+        try:
+            target_root = state_root or (Path(tempfile.gettempdir()) / f'uncrash-{os.getuid()}')
+            binary = build_native(target_root)
+        except (RecoveryError, OSError):
+            binary = None
+    if binary is None:
+        return None
+    try:
+        proc = subprocess.run(
+            [str(binary), '--scan-panics', str(log_dir), str(max_files)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if proc.returncode == 0:
+            data = json.loads(proc.stdout.strip() or '[]')
+            if isinstance(data, list):
+                return data
+    except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def scan_agent_log_panics(log_dir: Path, max_files: int = 20, state_root: Path = None) -> list[dict]:
     """Scan recent agent log files for unhandled panic/crash signatures."""
     if not isinstance(max_files, int) or not 1 <= max_files <= 100:
         raise ValueError('Log file budget must be between 1 and 100')
+    native_result = native_scan_agent_log_panics(log_dir, max_files, state_root)
+    if native_result is not None:
+        return native_result
     try:
         log_dir = no_links(log_dir)
         candidates = []

@@ -530,7 +530,199 @@ fn run(index: usize, job: Job, key: &[u8], compress: bool) -> io::Result<String>
         logical_size,
     ))
 }
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 16);
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+fn find_panic_in_content(content: &str) -> Option<(String, String)> {
+    for line in content.lines() {
+        let lower = line.to_ascii_lowercase();
+        if let Some(pos) = lower.find("caught panic:") {
+            let orig_from_match = &line[pos..];
+            let after_prefix = &orig_from_match["caught panic:".len()..];
+            let detail = after_prefix.trim_start();
+            let signature = orig_from_match.trim();
+            return Some((signature.to_string(), detail.trim().to_string()));
+        }
+    }
+    for line in content.lines() {
+        let lower = line.to_ascii_lowercase();
+        if let Some(pos) = lower.find("runtime error:") {
+            let orig_from_match = &line[pos..];
+            let after_prefix = &orig_from_match["runtime error:".len()..];
+            let detail = after_prefix.trim_start();
+            let detail_lower = detail.to_ascii_lowercase();
+            if detail_lower.starts_with("invalid memory address or nil pointer dereference") {
+                let signature = orig_from_match.trim();
+                return Some((signature.to_string(), detail.trim().to_string()));
+            }
+        }
+    }
+    for line in content.lines() {
+        let lower = line.to_ascii_lowercase();
+        if let Some(pos) = lower.find("failed to load conversation ") {
+            let orig_from_match = &line[pos..];
+            let rest = &orig_from_match["failed to load conversation ".len()..];
+            if let Some(colon_pos) = rest.find(':') {
+                let id_candidate = rest[..colon_pos].trim();
+                if !id_candidate.is_empty() && id_candidate.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+                    let after_colon = &rest[colon_pos + 1..];
+                    let after_colon_lower = after_colon.to_ascii_lowercase();
+                    if after_colon_lower.contains("database disk image is malformed") {
+                        let signature = orig_from_match.trim();
+                        return Some((signature.to_string(), id_candidate.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    for line in content.lines() {
+        let lower = line.to_ascii_lowercase();
+        if let Some(pos) = lower.find("program was killed:") {
+            let orig_from_match = &line[pos..];
+            let after_prefix = &orig_from_match["program was killed:".len()..];
+            let detail = after_prefix.trim_start();
+            let detail_lower = detail.to_ascii_lowercase();
+            if detail_lower.starts_with("program experienced a panic") {
+                let signature = orig_from_match.trim();
+                return Some((signature.to_string(), detail.trim().to_string()));
+            }
+        }
+    }
+    None
+}
+fn scan_panics(args: &[String]) -> io::Result<()> {
+    if args.is_empty() {
+        println!("[]");
+        return Ok(());
+    }
+    let log_dir = Path::new(&args[0]);
+    let max_files: usize = if args.len() > 1 {
+        match args[1].parse::<usize>() {
+            Ok(n) if (1..=100).contains(&n) => n,
+            _ => return Err(fail()),
+        }
+    } else {
+        20
+    };
+
+    let meta = match std::fs::symlink_metadata(log_dir) {
+        Ok(m) => m,
+        Err(_) => {
+            println!("[]");
+            return Ok(());
+        }
+    };
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        println!("[]");
+        return Ok(());
+    }
+
+    let entries = match std::fs::read_dir(log_dir) {
+        Ok(e) => e,
+        Err(_) => {
+            println!("[]");
+            return Ok(());
+        }
+    };
+
+    let mut candidates: Vec<(i128, PathBuf)> = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let p = entry.path();
+        if p.extension().and_then(|s| s.to_str()) != Some("log") {
+            continue;
+        }
+        let smeta = match std::fs::symlink_metadata(&p) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if smeta.file_type().is_symlink() || !smeta.is_file() {
+            continue;
+        }
+        let mtime_ns = (smeta.mtime() as i128) * 1_000_000_000 + (smeta.mtime_nsec() as i128);
+        candidates.push((mtime_ns, p));
+    }
+
+    candidates.sort_by(|a, b| (b.0, &b.1).cmp(&(a.0, &a.1)));
+    if candidates.len() > max_files {
+        candidates.truncate(max_files);
+    }
+
+    let mut panics_json = Vec::new();
+    for (_, log_path) in candidates {
+        let file_name = match log_path.file_name().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+
+        let c_path = match CString::new(log_path.as_os_str().as_bytes()) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let fd = unsafe { openat(-100 /* AT_FDCWD */, c_path.as_ptr(), 0 /* O_RDONLY */ | NOFOLLOW | CLOEXEC) };
+        if fd < 0 {
+            continue;
+        }
+        let mut file = unsafe { File::from_raw_fd(fd) };
+        let meta = match file.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let file_size = meta.len();
+        let chunk_size: u64 = 512 * 1024;
+        let read_offset = if file_size > chunk_size {
+            file_size - chunk_size
+        } else {
+            0
+        };
+        if file.seek(io::SeekFrom::Start(read_offset)).is_err() {
+            continue;
+        }
+        let mut buf = Vec::new();
+        if file.take(chunk_size).read_to_end(&mut buf).is_err() {
+            continue;
+        }
+        let content = String::from_utf8_lossy(&buf);
+
+        if let Some((signature, matched_detail)) = find_panic_in_content(&content) {
+            panics_json.push(format!(
+                "{{\"log_path\":\"{}\",\"log_name\":\"{}\",\"signature\":\"{}\",\"matched_detail\":\"{}\"}}",
+                json_escape(&log_path.to_string_lossy()),
+                json_escape(&file_name),
+                json_escape(&signature),
+                json_escape(&matched_detail)
+            ));
+        }
+    }
+
+    println!("[{}]", panics_json.join(","));
+    Ok(())
+}
 fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 && args[1] == "--scan-panics" {
+        return scan_panics(&args[2..]);
+    }
     let mut input = String::new();
     io::stdin()
         .take(16 * 1024 * 1024 + 1)
