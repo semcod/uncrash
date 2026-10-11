@@ -1108,14 +1108,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         }
         const tabsInfo = ws.tabs_count > 0 ? `${ws.tabs_count} tab(ów)` : (ws.display || '');
         return `
-          <div class="workspace-chip ${isActive ? 'active' : ''}" style="border-left: 3px solid ${color}" onclick="selectWorkspace('${ws.workspace_id}')">
+          <div id="workspace-chip-${idx}" class="workspace-chip ${isActive ? 'active' : ''}" style="border-left: 3px solid ${color}">
             <span>${icon}</span>
-            <span><strong>${shortName}</strong> [${badge}] (${tabsInfo})</span>
+            <span><strong>${escapeHtml(shortName)}</strong> [${badge}] (${escapeHtml(tabsInfo)})</span>
             ${kbdHint}
-            <span class="chip-close" onclick="event.stopPropagation(); closeWorkspace('${ws.workspace_id}')" title="Zamknij workspace">✕</span>
+            <span id="workspace-close-${idx}" class="chip-close" title="Zamknij workspace">✕</span>
           </div>
         `;
       }).join('');
+      filtered.forEach((ws, idx) => {
+        const chip = document.getElementById(`workspace-chip-${idx}`);
+        if (chip) chip.onclick = () => selectWorkspace(ws.workspace_id);
+        const close = document.getElementById(`workspace-close-${idx}`);
+        if (close) close.onclick = event => {
+          event.stopPropagation();
+          closeWorkspace(ws.workspace_id);
+        };
+      });
     }
 
     async function launchWorkspace(snapshotId, forceNew = false, engine = 'native') {
