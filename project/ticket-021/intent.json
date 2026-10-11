@@ -1,0 +1,101 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-021",
+  "summary": "Accelerate agent storage health and provider inventory",
+  "workstream": "application",
+  "classification": {
+    "kind": "FEATURE",
+    "priority": "P2",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-021/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/diagnostics.py",
+    "src/uncrash/snapshot.rs",
+    "tests/test_diagnostics.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [
+    "ticket-019",
+    "ticket-020"
+  ],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "00ceb4a06535de776ab798d513bbff49dc33bde3",
+    "targetBranch": "main",
+    "outcome": "Accelerate diagnostics by parallelizing agent storage SQLite integrity checks and providing native multi-threaded acceleration in Rust for snapshot health and provider inventory while retaining verified 100% Python fallback.",
+    "nonGoals": [
+      "No external C library dependencies or system package additions",
+      "No changes to public CLI interface or JSON diagnostic schema contracts"
+    ],
+    "complexity": "M",
+    "estimatedMinutes": 60,
+    "budgets": {
+      "maxImplementationFiles": 4,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Use bounded thread pool execution for SQLite integrity checks in Python to eliminate the single-threaded 2.5s bottleneck; add parallel multi-threaded audit in snapshot.rs for snapshot health; add native provider inventory scanning in snapshot.rs for fast Codex/Claude session enumeration with full Python fallback.",
+      "components": [
+        {
+          "name": "diagnostics-acceleration",
+          "paths": [
+            "src/uncrash/snapshot.rs",
+            "src/uncrash/diagnostics.py",
+            "tests/test_diagnostics.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Revert commit on main; retain previous diagnostics release."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "python -m pytest tests/test_diagnostics.py -q"
+        ],
+        "evidence": "Bounded parallel SQLite integrity checks preserve exact error classification ('ok', 'corrupted', 'unavailable', 'missing') and sequential parity."
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "python -m pytest tests/test_diagnostics.py -q"
+        ],
+        "evidence": "Multi-threaded native snapshot health audit matches Python fallback and preserves security boundaries."
+      },
+      {
+        "criterion": "AC-03",
+        "commands": [
+          "python -m pytest tests/test_diagnostics.py -q"
+        ],
+        "evidence": "Native provider inventory acceleration matches Python output structure and falls back safely on any IO or format error."
+      },
+      {
+        "criterion": "AC-04",
+        "commands": [
+          "python -m pytest -q",
+          "./project/governance-check.sh --base 00ceb4a06535de776ab798d513bbff49dc33bde3"
+        ],
+        "evidence": "All tests pass without regression; governance clean; publication via OneDev and independent Validator."
+      }
+    ]
+  }
+}
