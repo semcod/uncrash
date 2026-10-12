@@ -2,15 +2,15 @@
 {
   "schema": "wellmanifest.docs/document/v1",
   "id": "uncrash-apx-recovery",
-  "kind": "reference",
-  "version": 1,
+  "kind": "information",
+  "version": 2,
   "title": "Uncrash recovery interface for Willmux",
   "status": "implemented",
   "owner": "semcod/uncrash",
   "created": "2026-10-10",
-  "updated": "2026-10-10",
+  "updated": "2026-10-12",
   "review_after": "2026-11-10",
-  "source_revision": "working-tree",
+  "source_revision": "cd0221e300d613185df95c6067677204463d9390",
   "affected_repositories": ["semcod/uncrash"],
   "evidence": ["repo://semcod/uncrash/app/uncrash-recovery/server.py"]
 }
@@ -35,22 +35,24 @@ execution receipts or sandbox isolation.
 
 <!-- docs:section content -->
 Use a compatible Uncrash installation exposing `bundle-transfer` and
-`uncrash.events.append_event`. The verified local runtime currently uses the
-recovery implementation from ticket-007; that implementation is still in an
-open PR and must be integrated before a production rollout of this adapter.
+`uncrash.events.append_event`. The core backend is published through the protected Uncrash delivery process.
+Verify the selected installed runtime and its current receipts before deployment.
 Check `uncrash --help` for `bundle-transfer`. Start its Uncrash backend
 separately; the dashboard remains available even without this app.
 
 ```bash
 python app/uncrash-recovery/server.py --sessions-file /private/sessions.json \
-  --bundle /private/recovery.tar --host tom@minis
+  --bundle /private/recovery.tar --host user@example.invalid
 ```
 
 The inventory is a private JSON array containing `conversation_id`, `cwd`,
 `novnc_url`, `mode` and `fidelity`. Inventory URLs must be loopback HTTP.
 Both the adapter state directory and input files must belong to the caller
-and have no group/world permissions or symlinks. Runtime state defaults to
-`~/.local/state/uncrash-apx`. The bundle is limited to 128 MiB. Review the
+and have no group/world permissions or symlinks. Runtime paths, port, backend URL and operation deadlines resolve from the
+selected `.env` through the typed Env DSL adapter; pass `--env-file` to select
+a different deployment. Explicit CLI values override that selection. There is
+no implicit SSH destination: configure `UNCRASH_APX_SSH_HOST` or `--host` for
+transfers. Read-only sessions remain available without a transfer host. The bundle is limited to 128 MiB. Review the
 permission resources in `apx.yaml` for the selected deployment paths.
 
 Willmux can open the running adapter with:
@@ -87,4 +89,5 @@ executed by this application.
 Register the adapter in Willmux under a bounded owning ticket, connect a
 protected receipt signer where required, and implement a distinct Fixos APX
 adapter with explicit diagnosis-versus-repair commands. Keep each deployment's
-resources and endpoints aligned with its local SSOT.
+resources and endpoints aligned with its selected environment; `ssot.yaml`
+references the environment keys and owns only the fixed interface contract.

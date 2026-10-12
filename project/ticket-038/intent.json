@@ -1,0 +1,29 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-038",
+  "summary": "APX environment consumer and docs metadata",
+  "workstream": "application",
+  "classification": {
+    "kind": "FEATURE",
+    "priority": "P1",
+    "origin": "requested"
+  },
+  "allowedPaths": [
+    "project/ticket-038/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "app/uncrash-recovery/doc/README.md",
+    "app/uncrash-recovery/server.py",
+    "app/uncrash-recovery/ssot.yaml",
+    "app/uncrash-recovery/tests/test_server.py",
+    "src/uncrash/configuration.py",
+    "tests/test_configuration.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null
+}

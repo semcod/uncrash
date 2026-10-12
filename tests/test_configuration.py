@@ -105,3 +105,17 @@ def test_mcp_network_binding_and_transport_come_from_env(tmp_path, monkeypatch):
     monkeypatch.setattr(api, 'create_mcp_server', lambda **kwargs: SimpleNamespace(sse_app=lambda: object()))
     assert cli.main(['--env-file', str(p), '--config', str(config), '--state', str(tmp_path / 'store'), 'mcp']) == 0
     assert calls == [{'host': '127.0.0.3', 'port': 15433}]
+
+
+@pytest.mark.parametrize('body', [
+    'UNCRASH_APX_PORT=80',
+    'UNCRASH_APX_BACKEND_URL=http://0.0.0.0:18891/',
+    'UNCRASH_APX_BACKEND_URL=http://user@127.0.0.1:18891/',
+    'UNCRASH_APX_BACKEND_URL=https://127.0.0.1:18891/',
+    'UNCRASH_APX_SSH_HOST=-oProxyCommand=bad',
+    'UNCRASH_APX_TRANSFER_TIMEOUT_SECONDS=31',
+])
+def test_apx_settings_preserve_loopback_and_explicit_deadline_constraints(tmp_path, body):
+    path = env_file(tmp_path, body, canonical=True)
+    with pytest.raises(settings.SettingsError):
+        settings.environment_settings(path, {}, include_defaults=False)

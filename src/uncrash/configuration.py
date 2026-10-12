@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import sys
+from urllib.parse import urlsplit
 
 
 # Compatibility defaults for older installations without the expanded template.
@@ -48,6 +49,14 @@ FIELDS = {
     'UNCRASH_NATIVE_BUILD_TIMEOUT_SECONDS': ('native_build_timeout_seconds', 'int', '120'),
     'UNCRASH_NATIVE_CAPTURE_TIMEOUT_SECONDS': ('native_capture_timeout_seconds', 'int', '600'),
     'UNCRASH_SQLITE_BACKUP_TIMEOUT_SECONDS': ('sqlite_backup_timeout_seconds', 'int', '10'),
+    'UNCRASH_APX_PORT': ('apx_port', 'port', '18893'),
+    'UNCRASH_APX_BACKEND_URL': ('apx_backend_url', 'loopback_http', 'http://127.0.0.1:18891/'),
+    'UNCRASH_APX_STATE_DIR': ('apx_state_dir', 'path', '~/.local/state/uncrash-apx'),
+    'UNCRASH_APX_SSH_HOST': ('apx_ssh_host', 'ssh_host', None),
+    'UNCRASH_APX_PREVIEW_TIMEOUT_MILLISECONDS': ('apx_preview_timeout_milliseconds', 'int', '200'),
+    'UNCRASH_APX_REQUEST_TIMEOUT_SECONDS': ('apx_request_timeout_seconds', 'int', '5'),
+    'UNCRASH_APX_TRANSFER_TIMEOUT_SECONDS': ('apx_transfer_timeout_seconds', 'int', '15'),
+    'UNCRASH_APX_TRANSFER_PROCESS_TIMEOUT_SECONDS': ('apx_transfer_process_timeout_seconds', 'int', '30'),
     'UNCRASH_LOG_MAX_HOURLY_BYTES': ('log_max_hourly_bytes', 'int', '4194304'),
 }
 HEADERS = ('ENV_DSL_VERSION', 'ENV_DSL_NAMESPACE', 'ENV_DSL_ENVIRONMENT')
@@ -87,6 +96,19 @@ def _convert(name, value):
         if not candidate.is_absolute():
             raise SettingsError('Environment paths must be absolute or start with ~/')
         result = str(no_links(candidate))
+    elif kind == 'ssh_host':
+        if re.fullmatch(r'[a-zA-Z0-9_.-]+@[a-zA-Z0-9][a-zA-Z0-9_.-]*', value) is None:
+            raise SettingsError('ENV-SEMANTIC-001: configure an explicit SSH user and host')
+        result = value
+    elif kind == 'loopback_http':
+        try:
+            url = urlsplit(value)
+            valid = url.scheme == 'http' and url.hostname == '127.0.0.1' and not url.username and not url.password and url.port and not url.fragment
+        except ValueError:
+            valid = False
+        if not valid:
+            raise SettingsError('ENV-SECURITY-001: APX backend must be a loopback HTTP URL without credentials')
+        result = value
     elif kind in ('host', 'loopback'):
         if len(value) > 253 or re.fullmatch(r'[A-Za-z0-9.-]+', value) is None:
             raise SettingsError('ENV-SEMANTIC-001: invalid host')
@@ -105,6 +127,10 @@ def _convert(name, value):
 
 
 def _validate(settings):
+    if settings.get('apx_port', 18893) < 1024:
+        raise SettingsError('ENV-SECURITY-001: APX must use a non-privileged port')
+    if settings.get('apx_transfer_process_timeout_seconds', 30) <= settings.get('apx_transfer_timeout_seconds', 15):
+        raise SettingsError('ENV-SEMANTIC-001: APX process deadline must exceed transfer deadline')
     if not 1 <= settings.get('rust_threads', 4) <= 16:
         raise SettingsError('Rust threads must be between 1 and 16')
     if not 5 <= settings.get('interval_seconds', 300) <= 86400:
