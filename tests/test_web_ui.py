@@ -583,8 +583,24 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 const nodes = new Map(), selected = [], closed = [], listeners = {};
 const attr = (tag, name) => tag.match(new RegExp('\\b'+name+'="([^"]*)"'))?.[1];
 let markup = '', targets = [], stopped = false;
-const fixed = ['workspacesBar', 'shortcutsBar', 'workspacesChips', 'workspaceSearchInput', 'searchInput'];
-const node = id => ({id, value:'', style:{}, innerHTML:'', addEventListener(){}, classList:{add(){},remove(){},toggle(){}}});
+const fixed = ['workspacesBar', 'shortcutsBar', 'workspacesChips', 'workspaceSearchInput', 'searchInput', 'workspacesCountBadge', 'wsWrapModeBtn', 'wsScrollModeBtn'];
+const node = id => {
+  const classes = new Set();
+  return {
+    id, value:'', style:{}, innerHTML:'', textContent:'', addEventListener(){},
+    classes,
+    classList:{
+      add(cls){ classes.add(cls); },
+      remove(cls){ classes.delete(cls); },
+      toggle(cls, force){
+        if (force === undefined) { if (classes.has(cls)) classes.delete(cls); else classes.add(cls); }
+        else if (force) classes.add(cls);
+        else classes.delete(cls);
+      },
+      contains(cls){ return classes.has(cls); }
+    }
+  };
+};
 for (const id of fixed) {
   nodes.set(id, node(id));
 }
@@ -610,7 +626,12 @@ const context = vm.createContext({
   document:{readyState:'loading',activeElement:{tagName:'BODY'},addEventListener(){},
     getElementById: id => nodes.get(id) || null},
   window:{addEventListener:(kind,fn) => listeners[kind]=fn, location:new URL('http://localhost/'),history:{replaceState(){}}},
-  URL, URLSearchParams, console, setTimeout(){}, setInterval(){}
+  URL, URLSearchParams, console, setTimeout(){}, setInterval(){},
+  localStorage:{
+    _items: {},
+    getItem(k){ return this._items[k] || null; },
+    setItem(k, v){ this._items[k] = String(v); }
+  }
 });
 vm.runInContext(input.script, context, {timeout:1000});
 context.showToast = () => {};
@@ -619,6 +640,9 @@ context.closeWorkspace = id => closed.push(id);
 context.items = input.workspaces;
 vm.runInContext('activeWorkspaces = items;', context);
 nodes.get('workspaceSearchInput').value = input.query;
+if (input.wrapMode) {
+  context.setWorkspacesWrapMode(input.wrapMode);
+}
 context.renderWorkspacesBar();
 let error = null;
 const event = {stopPropagation(){stopped = true;}};
@@ -638,17 +662,28 @@ try {
   }
   if (input.key) listeners.keydown({key:input.key,ctrlKey:false,metaKey:false,altKey:false,preventDefault(){}});
 } catch(err) {error=err.message;}
-process.stdout.write(JSON.stringify({html:markup,selected,closed,stopped,error,injected:!!context.injected}));
+process.stdout.write(JSON.stringify({
+  html: markup,
+  selected,
+  closed,
+  stopped,
+  error,
+  injected: !!context.injected,
+  countBadge: nodes.get('workspacesCountBadge')?.textContent || '',
+  chipsClasses: Array.from(chips.classes),
+  wrapBtnActive: nodes.get('wsWrapModeBtn')?.classes.has('active'),
+  scrollBtnActive: nodes.get('wsScrollModeBtn')?.classes.has('active')
+}));
 """
 
 
-def execute_workspace_bar(workspaces, *, query="", click=None, key=None):
+def execute_workspace_bar(workspaces, *, query="", click=None, key=None, wrap_mode=None):
     node = shutil.which("node")
     assert node, "Workspace bar execution tests require Node"
     script = DASHBOARD_HTML.split("<script>", 1)[1].split("</script>", 1)[0]
     run = subprocess.run(
         [node, "-e", WORKSPACE_BAR_HARNESS],
-        input=json.dumps(dict(script=script, workspaces=workspaces, query=query, click=click, key=key)),
+        input=json.dumps(dict(script=script, workspaces=workspaces, query=query, click=click, key=key, wrapMode=wrap_mode)),
         capture_output=True, text=True, timeout=10,
     )
     assert run.returncode == 0, run.stderr
@@ -705,6 +740,55 @@ def test_workspace_chip_actions_match_first_visible_filtered_item(click, key):
     assert result["closed"] == (["shell-second"] if click == "close" else [])
     assert 'Codex' not in result["html"]
     assert '<span class="kbd-hint">1</span>' in result["html"]
+
+
+def test_workspace_tabs_bar_wrap_mode_and_counter_badge():
+    workspaces = [
+        workspace_chip(workspace_id="ws-1", name="Uncrash", terminal_tabs=[dict(name="codex", provider="codex")]),
+        workspace_chip(workspace_id="ws-2", name="Twinerd", terminal_tabs=[dict(name="shell", provider="shell")]),
+    ]
+    # Default is wrap mode, count badge is 2
+    res_default = execute_workspace_bar(workspaces)
+    assert res_default["error"] is None
+    assert "wrap-mode" in res_default["chipsClasses"]
+    assert res_default["wrapBtnActive"] is True
+    assert res_default["countBadge"] == "2"
+
+    # Switch to scroll mode
+    res_scroll = execute_workspace_bar(workspaces, wrap_mode="scroll")
+    assert res_scroll["error"] is None
+    assert "scroll-mode" in res_scroll["chipsClasses"]
+    assert res_scroll["scrollBtnActive"] is True
+
+    # Filtered query updates count badge to 1/2
+    res_filtered = execute_workspace_bar(workspaces, query="Twinerd")
+    assert res_filtered["error"] is None
+    assert res_filtered["countBadge"] == "1/2"
+
+
+def test_workspace_chip_deduplication_of_backend_tag():
+    ws = workspace_chip(workspace_id="ws-uncrash", name="Uncrash [Twinerd NATIVE]")
+    res = execute_workspace_bar([ws])
+    assert res["error"] is None
+    parsed = ParsedHTML(res["html"])
+    # The title inside the chip must be deduplicated
+    assert "Uncrash" in "".join(parsed.text)
+    assert "Uncrash [Twinerd NATIVE]" not in "".join(parsed.text)
+    # The full metadata is kept in the tooltip
+    assert any("Uncrash [Twinerd NATIVE]" in attrs.get("title", "") for _, attrs in parsed.tags)
+
+
+def test_workspace_keyboard_shortcut_key_zero_for_tenth_workspace():
+    workspaces = [
+        workspace_chip(workspace_id=f"ws-{i}", name=f"Workspace {i}")
+        for i in range(10)
+    ]
+    res = execute_workspace_bar(workspaces, key="0")
+    assert res["error"] is None
+    # Key 0 must select the 10th workspace (ws-9)
+    assert res["selected"] == ["ws-9"]
+    # The 10th chip must have kbd-hint '0'
+    assert '<span class="kbd-hint">0</span>' in res["html"]
 
 
 APPS_CATALOG_HARNESS = r"""

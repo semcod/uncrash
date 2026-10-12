@@ -411,12 +411,32 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .workspaces-bar {
       background: var(--bg-surface);
       border-bottom: 1px solid var(--border);
-      padding: 8px 24px;
+      padding: 8px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .workspaces-bar-controls {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .workspaces-chips-container {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      width: 100%;
+    }
+    .workspaces-chips-container.wrap-mode {
+      flex-wrap: wrap;
+      overflow-x: visible;
+    }
+    .workspaces-chips-container.scroll-mode {
+      flex-wrap: nowrap;
       overflow-x: auto;
-      flex-shrink: 0;
+      padding-bottom: 3px;
     }
     .workspaces-label {
       font-size: 0.8rem;
@@ -500,35 +520,69 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .workspace-chip {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       background: var(--bg-card);
       border: 1px solid var(--border);
-      border-radius: 20px;
-      padding: 4px 12px;
-      font-size: 0.8rem;
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 0.76rem;
+      line-height: 1.3;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all 0.15s ease;
       white-space: nowrap;
       user-select: none;
+      max-width: 320px;
     }
     .workspace-chip:hover {
-      border-color: var(--accent);
+      border-color: #585b70;
       background: var(--bg-hover);
     }
     .workspace-chip.active {
       border-color: var(--accent);
-      background: #26293d;
+      background: #232538;
       color: var(--accent);
       font-weight: 600;
-      box-shadow: 0 0 10px rgba(137, 180, 250, 0.3);
+      box-shadow: 0 0 8px rgba(137, 180, 250, 0.25);
+    }
+    .ws-chip-icon {
+      font-size: 0.75rem;
+      flex-shrink: 0;
+    }
+    .ws-chip-title {
+      font-weight: 600;
+      color: var(--text-main);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 160px;
+    }
+    .workspace-chip.active .ws-chip-title {
+      color: var(--accent);
+    }
+    .ws-chip-badge {
+      font-size: 0.68rem;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    .ws-chip-tabs {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      background: rgba(166, 173, 200, 0.08);
+      padding: 1px 5px;
+      border-radius: 4px;
+      flex-shrink: 0;
     }
     .chip-close {
       color: var(--text-muted);
       font-weight: bold;
-      margin-left: 4px;
+      margin-left: 2px;
       padding: 0 4px;
-      border-radius: 50%;
+      border-radius: 4px;
+      font-size: 0.72rem;
       transition: color 0.15s, background 0.15s;
+      flex-shrink: 0;
     }
     .chip-close:hover {
       color: var(--red);
@@ -716,25 +770,34 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </header>
 
   <div id="workspacesBar" class="workspaces-bar" style="display:none">
-    <div class="workspaces-label">
-      <span>🖥️ noVNC:</span>
-    </div>
-    <div style="display:flex; align-items:center; gap:8px">
-      <input type="text" id="workspaceSearchInput" class="workspace-search-input" placeholder="🔍 Szukaj workspace (/)..." oninput="renderWorkspacesBar()" aria-label="Filtruj aktywne workspace'y">
-      <div id="workspaceFilterPills" class="workspace-filter-pills">
-        <span class="ws-filter-chip active" data-filter="all" onclick="setWorkspaceFilter('all')">Wszystkie</span>
-        <span class="ws-filter-chip" data-filter="codex" onclick="setWorkspaceFilter('codex')">Codex</span>
-        <span class="ws-filter-chip" data-filter="agy" onclick="setWorkspaceFilter('agy')">Antigravity</span>
-        <span class="ws-filter-chip" data-filter="shell" onclick="setWorkspaceFilter('shell')">Shell</span>
+    <div class="workspaces-bar-controls">
+      <div class="workspaces-label">
+        <span>🖥️ noVNC:</span>
+        <span id="workspacesCountBadge" class="tag" style="font-size:0.68rem; padding:1px 6px; background:rgba(137,180,250,0.15); color:var(--accent); font-weight:700">0</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px">
+        <input type="text" id="workspaceSearchInput" class="workspace-search-input" placeholder="🔍 Szukaj workspace (/)..." oninput="renderWorkspacesBar()" aria-label="Filtruj aktywne workspace'y">
+        <div id="workspaceFilterPills" class="workspace-filter-pills">
+          <span class="ws-filter-chip active" data-filter="all" onclick="setWorkspaceFilter('all')">Wszystkie</span>
+          <span class="ws-filter-chip" data-filter="codex" onclick="setWorkspaceFilter('codex')">Codex</span>
+          <span class="ws-filter-chip" data-filter="agy" onclick="setWorkspaceFilter('agy')">Antigravity</span>
+          <span class="ws-filter-chip" data-filter="shell" onclick="setWorkspaceFilter('shell')">Shell</span>
+        </div>
+      </div>
+      <div style="margin-left:auto; display:flex; align-items:center; gap:8px">
+        <div class="apps-view-toggle">
+          <button id="wsWrapModeBtn" class="btn active" onclick="setWorkspacesWrapMode('wrap')" title="Kompaktowe zawijanie (widok bez przewijania)" style="padding:3px 8px; font-size:0.72rem">⤸ Zawijaj</button>
+          <button id="wsScrollModeBtn" class="btn" onclick="setWorkspacesWrapMode('scroll')" title="Pojedynczy wiersz z przewijaniem" style="padding:3px 8px; font-size:0.72rem">↔ 1 wiersz</button>
+        </div>
+        <button class="btn" style="padding:3px 8px; font-size:0.75rem" onclick="fetchWorkspaces(true)">🔄 Odśwież</button>
       </div>
     </div>
-    <div id="workspacesChips" style="display:flex; gap:8px; align-items:center; flex:1; overflow-x:auto;"></div>
-    <button class="btn" style="padding:3px 8px; font-size:0.75rem" onclick="fetchWorkspaces(true)">🔄 Odśwież</button>
+    <div id="workspacesChips" class="workspaces-chips-container wrap-mode"></div>
   </div>
 
   <div id="shortcutsBar" class="shortcuts-bar" style="display:none">
     <span>⌨️ <strong style="color:var(--text-main)">Skróty Testwins UX:</strong></span>
-    <span><span class="kbd-hint">1-9</span> Przełącz workspace</span>
+    <span><span class="kbd-hint">1-0</span> Przełącz workspace</span>
     <span><span class="kbd-hint">/</span> Szukaj workspace</span>
     <span><span class="kbd-hint">F</span> Pełny ekran</span>
     <span><span class="kbd-hint">R</span> Odśwież strumień</span>
@@ -1057,6 +1120,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     let visibleWorkspaces = [];
     let currentWorkspaceId = null;
     let currentWorkspaceFilter = 'all';
+    let currentWorkspacesWrapMode = 'wrap';
+    try {
+      const savedMode = localStorage.getItem('uncrash_ws_wrap_mode');
+      if (savedMode === 'scroll' || savedMode === 'wrap') {
+        currentWorkspacesWrapMode = savedMode;
+      }
+    } catch (_) {}
+
+    function setWorkspacesWrapMode(mode) {
+      currentWorkspacesWrapMode = mode;
+      try { localStorage.setItem('uncrash_ws_wrap_mode', mode); } catch (_) {}
+      const chips = document.getElementById('workspacesChips');
+      const wrapBtn = document.getElementById('wsWrapModeBtn');
+      const scrollBtn = document.getElementById('wsScrollModeBtn');
+      if (chips) {
+        chips.classList.toggle('wrap-mode', mode === 'wrap');
+        chips.classList.toggle('scroll-mode', mode === 'scroll');
+      }
+      if (wrapBtn) wrapBtn.classList.toggle('active', mode === 'wrap');
+      if (scrollBtn) scrollBtn.classList.toggle('active', mode === 'scroll');
+    }
 
     function setWorkspaceFilter(filterKey) {
       currentWorkspaceFilter = filterKey;
@@ -1134,6 +1218,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       visibleWorkspaces = filtered;
 
+      const countBadge = document.getElementById('workspacesCountBadge');
+      if (countBadge) {
+        countBadge.textContent = filtered.length !== activeWorkspaces.length
+          ? `${filtered.length}/${activeWorkspaces.length}`
+          : `${activeWorkspaces.length}`;
+      }
+
+      const wrapBtn = document.getElementById('wsWrapModeBtn');
+      const scrollBtn = document.getElementById('wsScrollModeBtn');
+      if (wrapBtn) wrapBtn.classList.toggle('active', currentWorkspacesWrapMode === 'wrap');
+      if (scrollBtn) scrollBtn.classList.toggle('active', currentWorkspacesWrapMode === 'scroll');
+      chips.classList.toggle('wrap-mode', currentWorkspacesWrapMode === 'wrap');
+      chips.classList.toggle('scroll-mode', currentWorkspacesWrapMode === 'scroll');
+
       if (filtered.length === 0) {
         chips.innerHTML = `
           <div class="workspaces-empty-hint" style="color:var(--text-muted); font-size:0.8rem; padding:4px 8px; display:flex; align-items:center; gap:8px">
@@ -1146,8 +1244,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       chips.innerHTML = filtered.map((ws, idx) => {
         const isActive = ws.workspace_id === currentWorkspaceId;
-        const shortName = ws.name || ws.workspace_id;
-        const kbdHint = idx < 9 ? `<span class="kbd-hint">${idx + 1}</span>` : '';
+        const rawName = ws.name || ws.workspace_id;
+        const cleanName = rawName.replace(/\\s*\\[Twinerd NATIVE\\]/gi, '').trim() || rawName;
+        const kbdHint = idx < 9 ? `<span class="kbd-hint">${idx + 1}</span>` : (idx === 9 ? `<span class="kbd-hint">0</span>` : '');
         let icon = '●';
         let badge = '🖥️ Natywny';
         let color = '#89b4fa';
@@ -1161,10 +1260,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           icon = '🧭'; badge = '🧭 Pelorus'; color = '#a6e3a1';
         }
         const tabsInfo = ws.tabs_count > 0 ? `${ws.tabs_count} tab(ów)` : (ws.display || '');
+        const tooltip = `${rawName} • [${badge}] • (${tabsInfo})${ws.display ? ' • ' + ws.display : ''}`;
         return `
-          <div id="workspace-chip-${idx}" class="workspace-chip ${isActive ? 'active' : ''}" style="border-left: 3px solid ${color}">
-            <span>${icon}</span>
-            <span><strong>${escapeHtml(shortName)}</strong> [${badge}] (${escapeHtml(tabsInfo)})</span>
+          <div id="workspace-chip-${idx}" class="workspace-chip ${isActive ? 'active' : ''}" style="border-left: 3px solid ${color}" title="${escapeHtml(tooltip)}">
+            <span class="ws-chip-icon">${icon}</span>
+            <span class="ws-chip-title"><strong>${escapeHtml(cleanName)}</strong></span>
+            <span class="ws-chip-badge tag tag-sm" style="background:${color}22; color:${color}">[${badge}]</span>
+            <span class="ws-chip-tabs">(${escapeHtml(tabsInfo)})</span>
             ${kbdHint}
             <span id="workspace-close-${idx}" class="chip-close" title="Zamknij workspace">✕</span>
           </div>
@@ -1930,15 +2032,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           searchInput.focus();
           searchInput.select();
         }
-      } else if (e.key >= '1' && e.key <= '9' && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        const idx = parseInt(e.key, 10) - 1;
+      } else if (((e.key >= '1' && e.key <= '9') || e.key === '0') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const idx = e.key === '0' ? 9 : parseInt(e.key, 10) - 1;
         const searchInput = document.getElementById('workspaceSearchInput');
         const hasFilter = (searchInput && searchInput.value.trim().length > 0) || currentWorkspaceFilter !== 'all';
         const targetList = hasFilter ? visibleWorkspaces : ((visibleWorkspaces && visibleWorkspaces.length > 0) ? visibleWorkspaces : activeWorkspaces);
         if (targetList && targetList[idx]) {
           e.preventDefault();
           selectWorkspace(targetList[idx].workspace_id);
-          showToast(`Przełączono na workspace [${idx + 1}]: ${targetList[idx].name || targetList[idx].workspace_id}`);
+          showToast(`Przełączono na workspace [${e.key}]: ${targetList[idx].name || targetList[idx].workspace_id}`);
         }
       } else if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) {
         const container = document.querySelector('.novnc-container');
