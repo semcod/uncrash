@@ -737,6 +737,41 @@ class WorkspaceSession:
             'host': self.host,
         }
 
+    def launch_app(self, app_name: str, cmd: str, profile_id: Optional[str] = None) -> Dict[str, Any]:
+        """Launch an application command on this workspace's virtual display."""
+        if not cmd:
+            raise RecoveryError(f"No executable command specified for app '{app_name}'")
+
+        display_str = self.display if self.display.startswith(':') else f":{self.display}"
+        env = {key: os.environ[key] for key in ('PATH', 'LANG', 'LC_ALL', 'TZ', 'HOME') if key in os.environ}
+        env['DISPLAY'] = display_str
+
+        proc = subprocess.Popen(
+            shlex.split(cmd) if isinstance(cmd, str) else cmd,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True
+        )
+        if hasattr(self.desktop, 'processes') and isinstance(self.desktop.processes, list):
+            self.desktop.processes.append(proc)
+
+        app_record = {
+            'name': app_name,
+            'cmd': cmd,
+            'profile_id': profile_id,
+            'pid': proc.pid,
+            'launched_at': datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+        self.gui_apps.append(app_record)
+        return {
+            'status': 'launched',
+            'workspace_id': self.workspace_id,
+            'display': self.display,
+            'pid': proc.pid,
+            'app': app_record
+        }
+
 
 class WorkspaceManager:
     """Manages isolated noVNC workspaces for snapshots via Twinerd, Kasm, CloneBox VM/Container, and Pelorus."""
@@ -1084,6 +1119,13 @@ CMD ["/bin/bash"]
                 ws.desktop.stop()
                 return True
             return False
+
+    def launch_app_in_workspace(self, workspace_id: str, app_name: str, cmd: str, profile_id: Optional[str] = None) -> Dict[str, Any]:
+        with self._lock:
+            ws = self.get_workspace(workspace_id)
+            if not ws:
+                raise RecoveryError(f"Workspace '{workspace_id}' not found or stopped")
+            return ws.launch_app(app_name=app_name, cmd=cmd, profile_id=profile_id)
 
 
 workspace_manager = WorkspaceManager()

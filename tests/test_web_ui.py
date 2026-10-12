@@ -705,3 +705,357 @@ def test_workspace_chip_actions_match_first_visible_filtered_item(click, key):
     assert result["closed"] == (["shell-second"] if click == "close" else [])
     assert 'Codex' not in result["html"]
     assert '<span class="kbd-hint">1</span>' in result["html"]
+
+
+APPS_CATALOG_HARNESS = r"""
+const vm = require('node:vm');
+const fs = require('node:fs');
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+
+const nodes = new Map();
+const classes = new Map();
+const makeElement = (id) => {
+  const el = {
+    id,
+    _html: '',
+    textContent: '',
+    value: '',
+    style: {},
+    children: [],
+    options: [],
+    set innerHTML(val) {
+      this._html = val;
+      if (id === 'appTargetWorkspaceSelect') {
+        this.options = [];
+        for (const m of val.matchAll(/<option\b[^>]*value="([^"]*)"/g)) {
+          this.options.push({ value: m[1] });
+        }
+      }
+      if (id === 'appsGrid') {
+        for (const m of val.matchAll(/id="([^"]*)"/g)) {
+          if (!nodes.has(m[1])) nodes.set(m[1], makeElement(m[1]));
+        }
+      }
+    },
+    get innerHTML() { return this._html || ''; },
+    classList: {
+      add(cls) {
+        if (!classes.has(id)) classes.set(id, new Set());
+        classes.get(id).add(cls);
+      },
+      remove(cls) {
+        if (classes.has(id)) classes.get(id).delete(cls);
+      },
+      toggle(cls, force) {
+        if (!classes.has(id)) classes.set(id, new Set());
+        const s = classes.get(id);
+        if (force === undefined) {
+          if (s.has(cls)) s.delete(cls); else s.add(cls);
+        } else if (force) {
+          s.add(cls);
+        } else {
+          s.delete(cls);
+        }
+      },
+      contains(cls) {
+        return classes.has(id) && classes.get(id).has(cls);
+      }
+    },
+    addEventListener() {},
+    appendChild(child) { this.children.push(child); }
+  };
+  return el;
+};
+
+const getElementById = id => {
+  if (!nodes.has(id)) nodes.set(id, makeElement(id));
+  return nodes.get(id);
+};
+
+const fixedIds = [
+  'appsModal', 'appsSearchInput', 'appFilterInput', 'appsGrid',
+  'appsViewGridBtn', 'appsViewTableBtn', 'appTargetWorkspaceSelect',
+  'previewArea', 'modalTotalApps', 'modalRecoverableApps', 'categoryPills', 'toast'
+];
+fixedIds.forEach(id => getElementById(id));
+
+let copied = [];
+let fetchCalls = [];
+let toasts = [];
+let selectedWorkspaces = [];
+
+const context = vm.createContext({
+  document: {
+    readyState: 'loading',
+    getElementById,
+    createElement: id => makeElement(id),
+    addEventListener() {}
+  },
+  window: {
+    addEventListener() {},
+    location: new URL('http://localhost/?modal=apps'),
+    history: { replaceState() {} }
+  },
+  URL,
+  URLSearchParams,
+  console,
+  setTimeout() {},
+  setInterval() {},
+  navigator: { clipboard: { writeText: text => copied.push(text) } },
+  fetch: async (url, opts) => {
+    fetchCalls.push({ url, opts });
+    if (url.includes('/workspace?')) {
+      return {
+        ok: true,
+        json: async () => ({
+          workspace_id: 'ws-new-launched',
+          engine: 'native',
+          status: 'running'
+        })
+      };
+    }
+    return { ok: true, json: async () => ({ status: 'launched', workspace_id: 'ws-target' }) };
+  },
+  Array
+});
+
+vm.runInContext(input.script, context, { timeout: 1000 });
+
+context.showToast = (msg) => toasts.push(msg);
+context.selectWorkspace = (id) => selectedWorkspaces.push(id);
+context.renderWorkspacePreview = (ws) => {};
+context.fetchWorkspaces = async () => {};
+
+(async () => {
+  let error = null;
+  try {
+    context.rawApps = input.applicationsData;
+    context.rawWs = input.activeWorkspaces || [];
+    context.rawCurWs = input.currentWorkspaceId || null;
+    vm.runInContext('applicationsData = rawApps; activeWorkspaces = rawWs; currentWorkspaceId = rawCurWs;', context);
+
+    if (input.viewMode) {
+      context.setAppsViewMode(input.viewMode);
+    }
+    context.populateAppTargetWorkspaces();
+    if (input.targetWorkspace) {
+      getElementById('appTargetWorkspaceSelect').value = input.targetWorkspace;
+    }
+    context.renderFilteredApps();
+
+    if (input.clickId) {
+      const target = getElementById(input.clickId);
+      if (target && typeof target.onclick === 'function') {
+        await target.onclick();
+      }
+    }
+  } catch (err) {
+    error = err.message + '\n' + err.stack;
+  }
+
+  const gridHtml = getElementById('appsGrid').innerHTML;
+  const selectHtml = getElementById('appTargetWorkspaceSelect').innerHTML;
+  const gridClasses = Array.from(classes.get('appsViewGridBtn') || []);
+  const tableClasses = Array.from(classes.get('appsViewTableBtn') || []);
+
+  process.stdout.write(JSON.stringify({
+    error,
+    gridHtml,
+    selectHtml,
+    gridClasses,
+    tableClasses,
+    copied,
+    fetchCalls,
+    toasts,
+    selectedWorkspaces
+  }));
+})();
+"""
+
+
+def execute_apps_catalog(applications_data, *, active_workspaces=None, current_workspace_id=None,
+                         target_workspace=None, view_mode=None, click_id=None):
+    node = shutil.which("node")
+    assert node, "Applications catalog execution tests require Node"
+    script = DASHBOARD_HTML.split("<script>", 1)[1].split("</script>", 1)[0]
+    payload = {
+        "script": script,
+        "applicationsData": applications_data,
+        "activeWorkspaces": active_workspaces or [],
+        "currentWorkspaceId": current_workspace_id,
+        "targetWorkspace": target_workspace,
+        "viewMode": view_mode,
+        "clickId": click_id
+    }
+    run = subprocess.run(
+        [node, "-e", APPS_CATALOG_HARNESS],
+        input=json.dumps(payload),
+        capture_output=True, text=True, timeout=10,
+    )
+    assert run.returncode == 0, run.stderr
+    return json.loads(run.stdout)
+
+
+def test_apps_catalog_view_mode_toggle_grid_and_table():
+    apps_data = {
+        "total_installed": 1,
+        "categories": {
+            "jetbrains": {
+                "label": "JetBrains IDE",
+                "apps": [{
+                    "id": "gateway",
+                    "name": "Gateway 2026.2.2",
+                    "cmd": "/path/to/gateway",
+                    "category": "jetbrains",
+                    "has_recovery_profile": True,
+                    "profile_id": "jetbrains-settings",
+                    "desktop_file": "/home/tom/.local/share/applications/jetbrains-gateway.desktop"
+                }]
+            }
+        }
+    }
+
+    # 1. Table view mode
+    res_table = execute_apps_catalog(apps_data, view_mode="table")
+    assert res_table["error"] is None
+    assert "active" in res_table["tableClasses"]
+    assert "active" not in res_table["gridClasses"]
+    assert '<table class="apps-table">' in res_table["gridHtml"]
+    assert "Aplikacja" in res_table["gridHtml"]
+    assert "Profil odzyskiwania" in res_table["gridHtml"]
+    assert "Polecenie CLI / Ścieżka" in res_table["gridHtml"]
+    assert "Plik Desktop" in res_table["gridHtml"]
+    assert "Opcje akcji" in res_table["gridHtml"]
+    assert "Gateway 2026.2.2" in res_table["gridHtml"]
+    assert "jetbrains-settings" in res_table["gridHtml"]
+    assert "app-launch-0" in res_table["gridHtml"]
+    assert "app-copy-0" in res_table["gridHtml"]
+
+    # 2. Grid view mode
+    res_grid = execute_apps_catalog(apps_data, view_mode="grid")
+    assert res_grid["error"] is None
+    assert "active" in res_grid["gridClasses"]
+    assert "active" not in res_grid["tableClasses"]
+    assert '<div class="app-card">' in res_grid["gridHtml"]
+    assert '<div class="app-card-actions">' in res_grid["gridHtml"]
+    assert "Gateway 2026.2.2" in res_grid["gridHtml"]
+    assert "app-launch-0" in res_grid["gridHtml"]
+    assert "app-copy-0" in res_grid["gridHtml"]
+
+
+def test_apps_catalog_target_workspaces_population():
+    apps_data = {"total_installed": 0, "categories": {}}
+    workspaces = [
+        {"workspace_id": "ws-1", "name": "PyCharm Host", "display": ":183"},
+        {"workspace_id": "ws-2", "name": "Terminal Box", "display": ":184"},
+    ]
+    res = execute_apps_catalog(apps_data, active_workspaces=workspaces, current_workspace_id="ws-2")
+    assert res["error"] is None
+    select_html = res["selectHtml"]
+    assert '__new__' in select_html
+    assert '✨ Nowy workspace (kolejna maszyna)' in select_html
+    assert 'ws-1' in select_html
+    assert 'PyCharm Host' in select_html
+    assert '(:183)' in select_html
+    assert 'ws-2' in select_html
+    assert 'selected' in select_html
+
+
+def test_apps_catalog_launch_in_new_workspace():
+    apps_data = {
+        "total_installed": 1,
+        "categories": {
+            "jetbrains": {
+                "apps": [{
+                    "id": "pycharm",
+                    "name": "PyCharm EAP",
+                    "cmd": "/opt/pycharm/bin/pycharm",
+                    "category": "jetbrains",
+                    "has_recovery_profile": True,
+                    "profile_id": "jetbrains-settings"
+                }]
+            }
+        }
+    }
+    res = execute_apps_catalog(apps_data, target_workspace="__new__", click_id="app-launch-0")
+    assert res["error"] is None
+    assert len(res["fetchCalls"]) >= 1
+    call = res["fetchCalls"][0]
+    assert "/api/v1/snapshots/" in call["url"]
+    assert "workspace?" in call["url"]
+    assert "force_new=true" in call["url"]
+    assert "app_name=PyCharm+EAP" in call["url"] or "app_name=PyCharm%20EAP" in call["url"]
+    assert "app_cmd=" in call["url"]
+
+
+def test_apps_catalog_launch_in_existing_workspace():
+    apps_data = {
+        "total_installed": 1,
+        "categories": {
+            "cli": {
+                "apps": [{
+                    "id": "tmux",
+                    "name": "Tmux Terminal",
+                    "cmd": "tmux new-session -A -s main",
+                    "category": "code_terminals",
+                    "has_recovery_profile": False
+                }]
+            }
+        }
+    }
+    workspaces = [{"workspace_id": "ws-target-42", "name": "Dev Machine"}]
+    res = execute_apps_catalog(
+        apps_data,
+        active_workspaces=workspaces,
+        target_workspace="ws-target-42",
+        click_id="app-launch-0"
+    )
+    assert res["error"] is None
+    assert any("/api/v1/workspaces/ws-target-42/launch-app" in c["url"] for c in res["fetchCalls"])
+    launch_call = next(c for c in res["fetchCalls"] if "/launch-app" in c["url"])
+    body = json.loads(launch_call["opts"]["body"])
+    assert body["name"] == "Tmux Terminal"
+    assert body["cmd"] == "tmux new-session -A -s main"
+    assert "ws-target-42" in res["selectedWorkspaces"]
+
+
+def test_apps_catalog_copy_command():
+    apps_data = {
+        "total_installed": 1,
+        "categories": {
+            "jetbrains": {
+                "apps": [{
+                    "id": "idea",
+                    "name": "IntelliJ IDEA",
+                    "cmd": "/opt/idea/bin/idea.sh",
+                    "category": "jetbrains"
+                }]
+            }
+        }
+    }
+    res = execute_apps_catalog(apps_data, click_id="app-copy-0")
+    assert res["error"] is None
+    assert res["copied"] == ["/opt/idea/bin/idea.sh"]
+    assert any("Skopiowano" in t for t in res["toasts"])
+
+
+def test_apps_catalog_xss_sanitization():
+    xss_app = {
+        "id": "xss",
+        "name": '<img src=x onerror="alert(1)">',
+        "cmd": 'echo "hello"; <script>evil()</script>',
+        "category": "jetbrains",
+        "has_recovery_profile": True,
+        "profile_id": '"><script>evil()</script>',
+        "desktop_file": '/path/to/<svg onload="evil()">.desktop'
+    }
+    apps_data = {"total_installed": 1, "categories": {"jetbrains": {"apps": [xss_app]}}}
+
+    for mode in ["grid", "table"]:
+        res = execute_apps_catalog(apps_data, view_mode=mode)
+        assert res["error"] is None
+        html = res["gridHtml"]
+        parsed = ParsedHTML(html)
+        assert not any(tag in {"img", "script", "svg"} for tag, _ in parsed.tags)
+        assert all("onerror" not in attrs and "onload" not in attrs for _, attrs in parsed.tags)
+

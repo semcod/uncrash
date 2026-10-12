@@ -388,11 +388,21 @@ def create_fastapi_app(store=None, config=None):
                               name: Optional[str] = None,
                               force_new: bool = False,
                               engine: str = "native",
-                              port: Optional[int] = None):
+                              port: Optional[int] = None,
+                              app_name: Optional[str] = None,
+                              app_cmd: Optional[str] = None,
+                              app_profile: Optional[str] = None):
         from .preview import extract_preview_metadata, workspace_manager
         try:
             _, _, _, manifest = resolved_store.load(snapshot_id)
             meta = extract_preview_metadata(manifest, snapshot_id)
+            gui_apps = None
+            if app_cmd:
+                gui_apps = [{
+                    "name": app_name or "Application",
+                    "cmd": app_cmd,
+                    "profile_id": app_profile
+                }]
             ws = workspace_manager.create_or_get_workspace(
                 snapshot_id=snapshot_id,
                 terminal_tabs=meta["terminal_tabs"],
@@ -401,7 +411,8 @@ def create_fastapi_app(store=None, config=None):
                 force_new=force_new,
                 engine=engine,
                 manifest=manifest,
-                port=port
+                port=port,
+                gui_apps=gui_apps
             )
             return ws.to_dict()
         except Exception as e:
@@ -414,6 +425,25 @@ def create_fastapi_app(store=None, config=None):
         if not ws:
             raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' not found or stopped")
         return ws.to_dict()
+
+    @app.post("/api/v1/workspaces/{workspace_id}/launch-app")
+    def post_workspace_launch_app(workspace_id: str, payload: Dict[str, Any]):
+        from .preview import workspace_manager
+        app_name = payload.get("name") or "Application"
+        cmd = payload.get("cmd") or payload.get("command") or ""
+        profile_id = payload.get("profile_id")
+        try:
+            res = workspace_manager.launch_app_in_workspace(
+                workspace_id=workspace_id,
+                app_name=app_name,
+                cmd=cmd,
+                profile_id=profile_id
+            )
+            return res
+        except RecoveryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/api/v1/workspaces/{workspace_id}/close")
     def post_close_workspace(workspace_id: str):
