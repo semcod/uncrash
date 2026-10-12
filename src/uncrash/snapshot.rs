@@ -81,6 +81,40 @@ const CLOEXEC: c_int = 0o2000000;
 fn fail() -> io::Error {
     io::Error::other("snapshot worker refused operation")
 }
+#[derive(Debug)]
+enum CaptureRefusal {
+    Changed,
+    Budget,
+    Unsafe,
+    Unreadable,
+}
+impl CaptureRefusal {
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::Changed => "source-changed",
+            Self::Budget => "byte-budget",
+            Self::Unsafe => "unsafe-source",
+            Self::Unreadable => "source-unreadable",
+        }
+    }
+}
+impl std::fmt::Display for CaptureRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.reason())
+    }
+}
+impl std::error::Error for CaptureRefusal {}
+fn refusal(reason: CaptureRefusal) -> io::Error {
+    io::Error::other(reason)
+}
+fn open_source(path: &Path) -> io::Result<File> {
+    open(path, NONBLOCK).map_err(|error| match error.kind() {
+        io::ErrorKind::NotFound => refusal(CaptureRefusal::Changed),
+        io::ErrorKind::PermissionDenied => refusal(CaptureRefusal::Unreadable),
+        _ if matches!(error.raw_os_error(), Some(20 | 40)) => refusal(CaptureRefusal::Unsafe),
+        _ => error,
+    })
+}
 fn ok(code: c_int) -> io::Result<()> {
     if code == 1 {
         Ok(())
@@ -332,10 +366,13 @@ fn result(
     format!("{{\"index\":{index},\"size\":{},\"sha256\":\"{hash}\",\"source_signature\":{:?},\"executable\":{},\"encoding\":\"{encoding}\",\"copy_method\":\"{method}\",\"blob_size\":{},\"blob_mtime_ns\":{}}}",size,signature(m),m.mode()&0o100!=0,out.len(),mtime(out))
 }
 fn run(index: usize, job: Job, key: &[u8], compress: bool) -> io::Result<String> {
-    let mut input = open(&job.src, 0o4000)?;
+    let mut input = open_source(&job.src)?;
     let before = input.metadata()?;
-    if !before.is_file() || before.len() > job.limit {
-        return Err(fail());
+    if !before.is_file() {
+        return Err(refusal(CaptureRefusal::Unsafe));
+    }
+    if before.len() > job.limit {
+        return Err(refusal(CaptureRefusal::Budget));
     }
     if key.is_empty()
         && signature(&before) == job.old_sig
@@ -355,9 +392,9 @@ fn run(index: usize, job: Job, key: &[u8], compress: bool) -> io::Result<String>
                         || after.len() != m.len()
                         || mtime(&after) != mtime(&m)
                         || signature(&input.metadata()?) != signature(&before)
-                        || signature(&open(&job.src, 0o4000)?.metadata()?) != signature(&before)
+                        || signature(&open_source(&job.src)?.metadata()?) != signature(&before)
                     {
-                        return Err(fail());
+                        return Err(refusal(CaptureRefusal::Changed));
                     }
                     return Ok(result(
                         index,
@@ -381,16 +418,16 @@ fn run(index: usize, job: Job, key: &[u8], compress: bool) -> io::Result<String>
         let mut data = Vec::new();
         (&mut input).take(before.len()).read_to_end(&mut data)?;
         if data.len() as u64 != before.len() {
-            return Err(fail());
+            return Err(refusal(CaptureRefusal::Changed));
         }
         if jsonl {
             let current = input.metadata()?;
-            let named = open(&job.src, 0o4000)?.metadata()?;
+            let named = open_source(&job.src)?.metadata()?;
             if named.dev() != before.dev()
                 || named.ino() != before.ino()
                 || current.len() < before.len()
             {
-                return Err(fail());
+                return Err(refusal(CaptureRefusal::Changed));
             }
             if signature(&current) != signature(&before) {
                 // A chat log may append while captured: verify the entire initial prefix.
@@ -398,7 +435,7 @@ fn run(index: usize, job: Job, key: &[u8], compress: bool) -> io::Result<String>
                 let mut verify = Vec::new();
                 (&mut input).take(before.len()).read_to_end(&mut verify)?;
                 if verify != data {
-                    return Err(fail());
+                    return Err(refusal(CaptureRefusal::Changed));
                 }
                 if current.len() > before.len() && data.last().is_some_and(|b| *b != b'\n') {
                     let end = data.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
@@ -453,13 +490,13 @@ fn run(index: usize, job: Job, key: &[u8], compress: bool) -> io::Result<String>
             }
             size += n as u64;
             if size > job.limit {
-                return Err(fail());
+                return Err(refusal(CaptureRefusal::Budget));
             }
             d.add(&bytes[..n])?;
             out.write(&bytes[..n])?;
         }
         if size != before.len() {
-            return Err(fail());
+            return Err(refusal(CaptureRefusal::Changed));
         }
         hash = d.finish()?;
         out.finish()?;
@@ -503,11 +540,11 @@ fn run(index: usize, job: Job, key: &[u8], compress: bool) -> io::Result<String>
                 }
                 count += n as u64;
                 if count > job.limit {
-                    return Err(fail());
+                    return Err(refusal(CaptureRefusal::Budget));
                 }
             }
             if count != before.len() {
-                return Err(fail());
+                return Err(refusal(CaptureRefusal::Changed));
             }
         }
         hash = digest(&mut output)?;
@@ -517,9 +554,9 @@ fn run(index: usize, job: Job, key: &[u8], compress: bool) -> io::Result<String>
     }
     if !jsonl
         && (signature(&input.metadata()?) != signature(&before)
-            || signature(&open(&job.src, 0o4000)?.metadata()?) != signature(&before))
+            || signature(&open_source(&job.src)?.metadata()?) != signature(&before))
     {
-        return Err(fail());
+        return Err(refusal(CaptureRefusal::Changed));
     }
     let out = open(&job.dst, 0)?.metadata()?;
     Ok(result(
@@ -2956,10 +2993,17 @@ fn main() -> io::Result<()> {
     }
     let mut results = results.lock().unwrap();
     results.sort_by_key(|x| x.0);
-    for (_, r) in results.iter() {
+    for (index, r) in results.iter() {
         match r {
             Ok(line) => println!("{line}"),
-            Err(_) => return Err(fail()),
+            Err(error) => {
+                let reason = error
+                    .get_ref()
+                    .and_then(|error| error.downcast_ref::<CaptureRefusal>())
+                    .map_or("worker-failed", CaptureRefusal::reason);
+                eprintln!("{{\"schema\":\"uncrash.worker-error/v1\",\"index\":{index},\"reason\":\"{reason}\"}}");
+                return Err(fail());
+            }
         }
     }
     Ok(())

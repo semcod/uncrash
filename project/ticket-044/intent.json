@@ -1,0 +1,95 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-044",
+  "summary": "Distinguish changed files from snapshot byte budgets in Rust diagnostics",
+  "workstream": "application",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "regression"
+  },
+  "allowedPaths": [
+    "project/ticket-044/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/snapshot.rs",
+    "src/uncrash/store.py",
+    "tests/test_capture_diagnostics.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "04d3ec7fb9897296c2f421327c40ab4eb8f88b5c",
+    "targetBranch": "main",
+    "outcome": "Correct native capture refusal diagnostics and publish through the existing protected local route",
+    "nonGoals": [
+      "change snapshot safety or budgets",
+      "signal host IDE or resume conversations"
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 45,
+    "budgets": {
+      "maxImplementationFiles": 3,
+      "maxAffectedComponents": 2,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Private bounded reason metadata from Rust worker to existing Python error-code classifier",
+      "components": [
+        {
+          "name": "snapshot worker",
+          "paths": [
+            "src/uncrash/snapshot.rs"
+          ]
+        },
+        {
+          "name": "diagnostics adapter",
+          "paths": [
+            "src/uncrash/store.py",
+            "tests/test_capture_diagnostics.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Revert this material diagnostic change"
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "python -m pytest tests/test_capture_diagnostics.py"
+        ],
+        "evidence": "Real worker budget and mutation cases report distinct existing event codes"
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "python -m pytest tests/test_native.py tests/test_recovery.py"
+        ],
+        "evidence": "Stable and unsafe reads preserve safety and compatibility"
+      },
+      {
+        "criterion": "AC-03",
+        "commands": [
+          "./project/governance-check.sh"
+        ],
+        "evidence": "Scope and managed checks pass in the canonical delivery checkout"
+      }
+    ]
+  }
+}
