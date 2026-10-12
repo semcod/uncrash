@@ -119,7 +119,7 @@ def test_close_respects_force_with_pinned_descriptor(monkeypatch, force, expecte
     monkeypatch.setattr(recovery, 'Path', lambda path: SimpleNamespace(stat=lambda: SimpleNamespace(st_uid=os.getuid())))
     monkeypatch.setattr('select.poll', lambda: SimpleNamespace(register=lambda *a: None, poll=lambda timeout: []))
     sent = []; closed = []
-    monkeypatch.setattr(signal, 'pidfd_send_signal', lambda fd, sig: sent.append((fd, sig)))
+    monkeypatch.setattr(runtime, 'pidfd_send_signal', lambda fd, sig: sent.append((fd, sig)))
     monkeypatch.setattr(os, 'close', closed.append)
     result = recovery.close_gui_app(pid=555, expected_start='123', force=force)
     assert sent == [(777, sig) for sig in expected] and closed == [777]
@@ -128,7 +128,7 @@ def test_close_respects_force_with_pinned_descriptor(monkeypatch, force, expecte
 
 def test_close_refuses_implicit_and_stale_targets(monkeypatch):
     monkeypatch.setattr(recovery, 'detected_gui_apps', lambda: [{'pid': 555, 'start_ticks': '124'}])
-    send = Mock(); monkeypatch.setattr(signal, 'pidfd_send_signal', send)
+    send = Mock(); monkeypatch.setattr(runtime, 'pidfd_send_signal', send)
     with pytest.raises(RecoveryError, match='explicit PID'): recovery.close_gui_app(name='pycharm')
     with pytest.raises(RecoveryError, match='identity changed'): recovery.close_gui_app(pid=555, expected_start='123')
     send.assert_not_called()
@@ -150,7 +150,7 @@ def test_pid_identity_change_after_open_sends_no_signal(monkeypatch):
     monkeypatch.setattr(recovery, 'Path', lambda path: SimpleNamespace(stat=lambda: SimpleNamespace(st_uid=os.getuid())))
     closed = []; send = Mock()
     monkeypatch.setattr(os, 'close', closed.append)
-    monkeypatch.setattr(signal, 'pidfd_send_signal', send)
+    monkeypatch.setattr(runtime, 'pidfd_send_signal', send)
     with pytest.raises(RecoveryError, match='identity changed before'):
         recovery.close_gui_app(pid=555, expected_start='123')
     send.assert_not_called(); assert closed == [777]
@@ -159,6 +159,7 @@ def test_pid_identity_change_after_open_sends_no_signal(monkeypatch):
 def test_owned_child_closes_via_pidfd(monkeypatch):
     import subprocess
     import sys
+    monkeypatch.delattr(signal, 'pidfd_send_signal', raising=False)
     child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
     try:
         start = runtime.start_ticks(child.pid)

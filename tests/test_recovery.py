@@ -365,7 +365,7 @@ def test_pidfd_send_signal_native_wrapper(monkeypatch):
     from uncrash import runtime
     import signal
     sent = []
-    monkeypatch.setattr(signal, 'pidfd_send_signal', lambda fd, sig: sent.append((fd, sig)))
+    monkeypatch.setattr(signal, 'pidfd_send_signal', lambda fd, sig: sent.append((fd, sig)), raising=False)
     runtime.pidfd_send_signal(42, signal.SIGTERM)
     assert sent == [(42, signal.SIGTERM)]
 
@@ -485,5 +485,36 @@ def test_pidfd_send_signal_real_process_syscall_fallback(monkeypatch):
         if child.poll() is None:
             child.kill()
             child.wait()
+
+
+def test_launcher_stop_without_native_wrapper_preserves_unrelated_process(fixture, monkeypatch):
+    import signal
+    _, store, _ = fixture
+    launcher = Launcher(store)
+    children = []
+    try:
+        for _ in range(2):
+            children.append(subprocess.Popen(
+                [sys.executable, '-c', 'import time; time.sleep(30)'],
+                start_new_session=True,
+            ))
+        owned, unrelated = children
+        launcher.save([{'id': 'owned', 'pid': owned.pid, 'start_ticks': start_ticks(owned.pid)}])
+        with monkeypatch.context() as patch:
+            patch.delattr(signal, 'pidfd_send_signal', raising=False)
+
+            def refuse_numeric_pid_signal(*args, **kwargs):
+                raise AssertionError('Recovery must signal the pinned descriptor')
+
+            patch.setattr(os, 'kill', refuse_numeric_pid_signal)
+            assert launcher.stop() == ['owned']
+        assert owned.wait(timeout=5) == -signal.SIGTERM
+        assert unrelated.poll() is None
+        assert launcher.records() == []
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
 
 
