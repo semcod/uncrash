@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from .recovery import detected_gui_apps, close_gui_app, jetbrains_state
 from .window_control import require_process_consent
 from .health import inspect_health
+from .configuration import runtime_settings
 from .store import RecoveryError, find_native_worker, no_links
 from .inventory import desktop_inventory
 from .web_ui import DASHBOARD_HTML
@@ -188,15 +189,17 @@ OPERATIONS_REGISTRY = [
 
 def _resolve_default_store(store=None, config=None):
     if store is not None:
-        return store, config or {'profiles': []}
-    state_dir = Path.home() / '.local/state/uncrash'
-    config_file = Path.home() / '.config/uncrash/config.json'
+        return store, runtime_settings(config or {'profiles': []})
+    settings = runtime_settings()
+    state_dir = Path(settings['state_dir'])
+    config_file = Path(settings['config_file'])
     resolved_config = config or {}
     if config_file.exists():
         try:
             resolved_config = {**json.loads(config_file.read_text()), **resolved_config}
         except Exception:
             pass
+    resolved_config = {**resolved_config, **settings, **(config or {})}
     from .store import Store
     resolved_store = Store(state_dir, resolved_config.get('origin'), encrypt=resolved_config.get('encrypt', False))
     return resolved_store, resolved_config
@@ -372,7 +375,7 @@ def create_fastapi_app(store=None, config=None):
                         "display": t.details.get("display") or f":{t.vnc_port - 5900}",
                         "rfb_port": t.vnc_port,
                         "ws_port": ws_port,
-                        "novnc_url": f"http://127.0.0.1:{ws_port}/vnc.html?autoconnect=true",
+                        "novnc_url": f"http://{runtime_settings()['preview_host']}:{ws_port}/vnc.html?autoconnect=true",
                         "tabs_count": 0,
                         "created_at": "",
                         "status": t.status,

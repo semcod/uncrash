@@ -21,64 +21,20 @@ from .recovery import (export_bundle, import_bundle, transfer_bundle, jetbrains_
 
 
 
-ENV_SETTINGS = {
-    'UNCRASH_JETBRAINS_METADATA': ('jetbrains_metadata', 'bool'),
-    'UNCRASH_ENCRYPT': ('encrypt', 'bool'), 'UNCRASH_COMPRESS': ('compress', 'bool'),
-    'UNCRASH_SNAPSHOT_ENGINE': ('snapshot_engine', 'engine'), 'UNCRASH_RUST_THREADS': ('rust_threads', 'int'),
-    'UNCRASH_RUST_BINARY': ('rust_binary', 'path'), 'UNCRASH_INTERVAL_SECONDS': ('interval_seconds', 'int'),
-    'UNCRASH_RETENTION': ('retention', 'int'), 'UNCRASH_MAX_FILE_BYTES': ('max_file_bytes', 'int'),
-    'UNCRASH_MAX_BYTES': ('max_bytes', 'int'), 'UNCRASH_MAX_TOTAL_BYTES': ('max_total_bytes', 'int'),
-    'UNCRASH_STARTUP_RESTORE': ('startup_restore', 'bool'),
-    'UNCRASH_STATE_DIR': ('state_dir', 'path'), 'UNCRASH_CONFIG_FILE': ('config_file', 'path'),
-}
+from .configuration import (FIELDS, SettingsError, activate_environment_file,
+                            environment_settings as _environment_settings, runtime_settings, reset_environment_file)
+
+ENV_SETTINGS = {name: (key, kind) for name, (key, kind, _) in FIELDS.items()}
 
 
 def environment_settings(path, environ=None, *, include_defaults=True):
-    environ = os.environ if environ is None else environ
-    values = {}
-    if path is not None and Path(path).exists():
-        path = no_links(path)
-        if not path.is_file() or path.stat().st_uid != os.getuid():
-            raise RecoveryError('Environment file must be an owned regular file')
-        if path.stat().st_size > 65536: raise RecoveryError('Environment file is oversized')
-        for raw in path.read_text().splitlines():
-            line = raw.strip()
-            if not line or line.startswith('#'): continue
-            if line.startswith('export '): line = line[7:]
-            name, separator, value = line.partition('=')
-            name = name.strip(); value = value.strip()
-            if not separator or name not in ENV_SETTINGS or name in values:
-                raise RecoveryError('Environment file has an unknown, duplicate or malformed setting')
-            if value.startswith(('"', "'")):
-                if len(value) < 2 or value[-1] != value[0]: raise RecoveryError('Invalid quoted environment value')
-                value = value[1:-1]
-            if '\x00' in value or '$' in value or '`' in value:
-                raise RecoveryError('Environment values must be literals without shell expansion')
-            values[name] = value
-    values.update({k: environ[k] for k in ENV_SETTINGS if k in environ})
-    settings = {'encrypt': False, 'snapshot_engine': 'rust', 'compress': False} if include_defaults else {}
-    for name, value in values.items():
-        key, kind = ENV_SETTINGS[name]
-        if kind == 'bool':
-            if value.lower() not in ['true', 'false', '1', '0']: raise RecoveryError('Invalid environment boolean')
-            settings[key] = value.lower() in ['true', '1']
-        elif kind == 'int':
-            if not value.isascii() or not value.isdecimal() or int(value) <= 0:
-                raise RecoveryError('Environment limits must be positive integers')
-            settings[key] = int(value)
-        elif kind == 'engine':
-            if value not in ['rust', 'python']: raise RecoveryError('Select rust or python snapshot engine')
-            settings[key] = value
-        else:
-            candidate = Path(value).expanduser()
-            if not candidate.is_absolute(): raise RecoveryError('Environment paths must be absolute or start with ~/')
-            settings[key] = str(no_links(candidate))
-    if not 1 <= settings.get('rust_threads', 4) <= 16: raise RecoveryError('Rust threads must be between 1 and 16')
-    if not 5 <= settings.get('interval_seconds', 300) <= 86400: raise RecoveryError('Snapshot interval must be 5..86400 seconds')
-    return settings
+    try:
+        return _environment_settings(path, environ, include_defaults=include_defaults)
+    except SettingsError as exc:
+        raise RecoveryError(str(exc)) from exc
 
 
-def main(argv=None):
+def _main(argv=None):
     parser = argparse.ArgumentParser(description='Fast local snapshots with optional encryption and explicit application recovery')
     parser.add_argument('--state', type=Path)
     parser.add_argument('--config', type=Path)
@@ -92,7 +48,7 @@ def main(argv=None):
     doctor.add_argument('--project', type=Path)
     doctor.add_argument('--pid', type=int)
     doctor.add_argument('--start-ticks')
-    doctor.add_argument('--max-age-seconds', type=int, default=600)
+    doctor.add_argument('--max-age-seconds', type=int, default=None)
     doctor.add_argument('--preflight', action='store_true', help='Exit 0 for no risk observed, 1 warning, 2 critical, 3 unknown')
     diagnostic = sub.add_parser('diagnose', help='Read-only session origins and backup health')
     diagnostic.add_argument('--output', type=Path, help='New private report directory')
@@ -146,7 +102,7 @@ def main(argv=None):
     pycharm_parser.add_argument('--preflight', action='store_true', help='Require a clear risk check before restore; needs an explicit --project')
     pycharm_parser.add_argument('--log-dir', type=Path, help='IDE log directory for restore preflight; discovers bounded saved thread dumps')
     pycharm_parser.add_argument('--thread-dump', type=Path, help='Existing Java dump for restore preflight')
-    pycharm_parser.add_argument('--max-age-seconds', type=int, default=600)
+    pycharm_parser.add_argument('--max-age-seconds', type=int, default=None)
     window = sub.add_parser('window-close', help='Request one explicit X11 window close with PID/start fencing')
     window.add_argument('--xid', type=lambda v: int(v, 0), required=True)
     window.add_argument('--pid', type=int, required=True)
@@ -165,14 +121,14 @@ def main(argv=None):
     bundle.add_argument('source', type=Path)
     bundle.add_argument('--host', required=True)
     bundle.add_argument('--name')
-    bundle.add_argument('--timeout', type=int, default=600)
+    bundle.add_argument('--timeout', type=int, default=None)
     serve_parser = sub.add_parser('serve', help='Run REST API server conforming to wellmanifest/nl-api-llm')
-    serve_parser.add_argument('--host', default='127.0.0.1', help='Host interface to bind')
-    serve_parser.add_argument('--port', type=int, default=8795, help='Port to listen on')
+    serve_parser.add_argument('--host', default=None, help='Host interface to bind')
+    serve_parser.add_argument('--port', type=int, default=None, help='Port to listen on')
     mcp_parser = sub.add_parser('mcp', help='Run MCP server conforming to wellmanifest/skills')
-    mcp_parser.add_argument('--transport', choices=['stdio', 'sse', 'streamable-http'], default='stdio', help='MCP transport')
-    mcp_parser.add_argument('--host', default='127.0.0.1', help='Host for network transport')
-    mcp_parser.add_argument('--port', type=int, default=18795, help='Port for network transport')
+    mcp_parser.add_argument('--transport', choices=['stdio', 'sse', 'streamable-http'], default=None, help='MCP transport')
+    mcp_parser.add_argument('--host', default=None, help='Host for network transport')
+    mcp_parser.add_argument('--port', type=int, default=None, help='Port for network transport')
     export = sub.add_parser('export')
     export.add_argument('snapshot', nargs='?', default='latest')
     action = sub.add_parser('action')
@@ -180,6 +136,14 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     try:
+        if args.env_file is not None:
+            if not args.env_file.exists():
+                raise RecoveryError('Requested environment file does not exist')
+            activate_environment_file(args.env_file)
+        if args.command in ('doctor', 'pycharm') and getattr(args, 'max_age_seconds', None) is None:
+            args.max_age_seconds = runtime_settings()['health_max_age_seconds']
+        if args.command == 'bundle-transfer' and args.timeout is None:
+            args.timeout = runtime_settings()['transfer_timeout_seconds']
         if args.command == 'doctor':
             report = inspect_health(log_dir=args.log_dir, thread_dump=args.thread_dump,
                                     project=args.project, pid=args.pid, expected_start=args.start_ticks,
@@ -290,10 +254,11 @@ def main(argv=None):
             env_path = user_config_env
         if args.env_file and not env_path.exists(): raise RecoveryError('Requested environment file does not exist')
         settings = environment_settings(env_path, include_defaults=False)
+        activate_environment_file(env_path)
         args.state = args.state or Path(settings.pop('state_dir', Path.home()/'.local/state/uncrash'))
         args.config = args.config or Path(settings.pop('config_file', Path.home()/'.config/uncrash/config.json'))
         config = json.loads(args.config.read_text()) if args.config.exists() else {'profiles': []}
-        config = {'encrypt': False, 'snapshot_engine': 'rust', 'compress': False, **config, **settings}
+        config = {**runtime_settings(), **config, **settings}
         if args.encrypt is not None: config['encrypt'] = args.encrypt
         profiles(config)
         if args.command == 'profiles':
@@ -313,6 +278,8 @@ def main(argv=None):
             print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
         store = Store(args.state, config.get('origin'), encrypt=config.get('encrypt', False))
         if args.command == 'serve':
+            args.host = args.host if args.host is not None else config['api_host']
+            args.port = args.port if args.port is not None else config['api_port']
             import uvicorn
             from .api import create_fastapi_app
             app = create_fastapi_app(store=store, config=config)
@@ -320,6 +287,9 @@ def main(argv=None):
             uvicorn.run(app, host=args.host, port=args.port)
             return 0
         if args.command == 'mcp':
+            args.host = args.host if args.host is not None else config['mcp_host']
+            args.port = args.port if args.port is not None else config['mcp_port']
+            args.transport = args.transport if args.transport is not None else config['mcp_transport']
             from .api import create_mcp_server
             server = create_mcp_server(store=store, config=config)
             if args.transport == 'stdio':
@@ -412,6 +382,14 @@ def main(argv=None):
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         print('uncrash: '+(str(exc) if isinstance(exc, RecoveryError) else type(exc).__name__), file=sys.stderr)
         return 1
+
+
+def main(argv=None):
+    token = activate_environment_file(None)
+    try:
+        return _main(argv)
+    finally:
+        reset_environment_file(token)
 
 
 def main_pycharm(argv=None):

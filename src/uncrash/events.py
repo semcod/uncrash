@@ -42,7 +42,8 @@ def append_event(root, *, event_type, code=None, outcome='OBSERVED', evidence=()
         info = os.fstat(fd)
         if info.st_uid != os.getuid() or info.st_mode & 0o077:
             raise RecoveryError('Diagnostic log must be private and owned')
-        if info.st_size > 4 * 1024**2: raise RecoveryError('Hourly diagnostic log budget exceeded')
+        from .configuration import runtime_settings
+        if info.st_size > runtime_settings()['log_max_hourly_bytes']: raise RecoveryError('Hourly diagnostic log budget exceeded')
         previous = '0' * 64; sequence = 0
         with os.fdopen(os.dup(fd), 'rb') as reader:
             reader.seek(0)

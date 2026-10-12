@@ -1,0 +1,33 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-037",
+  "summary": "Validate and consume one typed operational environment map for backup policies, network bindings, paths, preview controls and daemon behavior; preserve legacy callers and explicit per-operation parameters",
+  "workstream": "application",
+  "classification": {
+    "kind": "FEATURE",
+    "priority": "P1",
+    "origin": "requested"
+  },
+  "allowedPaths": [
+    "project/ticket-037/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/api.py",
+    "src/uncrash/cli.py",
+    "src/uncrash/configuration.py",
+    "src/uncrash/preview.py",
+    "tests/test_configuration.py",
+    "tests/test_native.py",
+    "src/uncrash/store.py",
+    "src/uncrash/runtime.py",
+    "src/uncrash/health.py",
+    "src/uncrash/events.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null
+}
