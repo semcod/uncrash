@@ -43,4 +43,5 @@
 | **ticket-039** | [`README.md`](./ticket-039/README.md) | - | - |  [`ai-codex-root.md`](./ticket-039/ai-codex-root.md) | - | - |
 | **ticket-040** | [`README.md`](./ticket-040/README.md) | - | - |  [`ai-codex-root.md`](./ticket-040/ai-codex-root.md) | - | - |
 | **ticket-041** | [`README.md`](./ticket-041/README.md) | - | - | - | - | - |
+| **ticket-042** | [`README.md`](./ticket-042/README.md) | - | - |  [`ai-codex-root.md`](./ticket-042/ai-codex-root.md) | - | - |
 <!-- AUTO:TICKET_INDEX:END -->

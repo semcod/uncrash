@@ -16,6 +16,7 @@ from .runtime import Launcher, recover_at_startup, run_daemon
 from .store import RecoveryError, Store, build_native, no_links, private_dir, profiles, write_file
 from .window_control import close_one_window, require_process_consent, window_inventory
 from .health import inspect_health
+from .installation import service_interpreter
 from .recovery import (export_bundle, import_bundle, transfer_bundle, jetbrains_state,
                        detected_gui_apps, close_gui_app, find_pycharm_executable, jetbrains_projects, restore_pycharm)
 
@@ -281,6 +282,8 @@ def _main(argv=None):
             result = diagnose(state=args.state, interval=config.get('interval_seconds', 300))
             if args.output: save_report(result, args.output)
             print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
+        if args.command == 'install-user':
+            interpreter = service_interpreter()
         store = Store(args.state, config.get('origin'), encrypt=config.get('encrypt', False))
         if args.command == 'serve':
             args.host = args.host if args.host is not None else config['api_host']
@@ -367,17 +370,17 @@ def _main(argv=None):
         elif args.command == 'install-user':
             private_dir(args.config.parent)
             if not args.config.exists():
-                write_file(args.config, json.dumps({'profiles': [], 'retention': 288, 'startup_restore': False}).encode())
+                write_file(args.config, json.dumps({'profiles': []}).encode())
             private_dir(Path.home()/'.config/systemd/user')
             def quote(value):
                 return '"'+str(value).replace('%', '%%').replace('\\', '\\\\').replace('"', '\\"')+'"'
-            command = ' '.join(quote(x) for x in [sys.executable, '-m', 'uncrash.cli', '--state', args.state.absolute(), '--config', args.config.absolute(), *(['--env-file', env_path.absolute()] if env_path.exists() else []), 'daemon'])
+            command = ' '.join(quote(x) for x in [interpreter, '-E', '-P', '-m', 'uncrash.cli', '--state', args.state.absolute(), '--config', args.config.absolute(), *(['--env-file', env_path.absolute()] if env_path.exists() else []), 'daemon'])
             unit = Path.home()/'.config/systemd/user/uncrash.service'
-            # Use the installed package interpreter, not a source-only PYTHONPATH.
+            # Keep the same import isolation used by the installed-runtime probe.
             unit.write_text('[Unit]\nDescription=Uncrash recovery snapshots with optional encryption\n\n[Service]\nType=simple\nUMask=0077\nExecStart='+command+'\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n')
             subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True)
             subprocess.run(['systemctl', '--user', 'enable', '--now', 'uncrash.service'], check=True)
-            result = {'service': 'uncrash.service', 'interval_seconds': config.get('interval_seconds', 300), 'profiles': len(config['profiles'])}
+            result = {'service': 'uncrash.service', 'interval_seconds': config['interval_seconds'], 'profiles': len(config['profiles'])}
         else:
             stop = threading.Event()
             for sig in [signal.SIGTERM, signal.SIGINT]:
