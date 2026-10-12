@@ -1,0 +1,1 @@
+PLF012 continuation: expand Env DSL BASE after compatible source038 merged; publish through independent protected controller, then deploy one private LOCAL.env preserving the active policy. Explicit session execution/publication authorization.
