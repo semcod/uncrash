@@ -254,11 +254,12 @@ def _main(argv=None):
             env_path = user_config_env
         if args.env_file and not env_path.exists(): raise RecoveryError('Requested environment file does not exist')
         settings = environment_settings(env_path, include_defaults=False)
+        file_setting_keys = set(environment_settings(env_path, {}, include_defaults=False))
         activate_environment_file(env_path)
         args.state = args.state or Path(settings.pop('state_dir', Path.home()/'.local/state/uncrash'))
         args.config = args.config or Path(settings.pop('config_file', Path.home()/'.config/uncrash/config.json'))
-        config = json.loads(args.config.read_text()) if args.config.exists() else {'profiles': []}
-        config = {**runtime_settings(), **config, **settings}
+        stored_config = json.loads(args.config.read_text()) if args.config.exists() else {'profiles': []}
+        config = {**runtime_settings(), **stored_config, **settings}
         if args.encrypt is not None: config['encrypt'] = args.encrypt
         profiles(config)
         if args.command == 'profiles':
@@ -267,7 +268,11 @@ def _main(argv=None):
                 result = {'available': discover(), 'changes_applied': False}
             else:
                 proposed = selected_config(config, args.select)
-                if args.apply: save_config(args.config, proposed)
+                if args.apply:
+                    # Persist profile state, never the derived effective settings map.
+                    persisted = {k: v for k, v in stored_config.items() if k not in file_setting_keys}
+                    persisted['profiles'] = proposed['profiles']
+                    save_config(args.config, persisted)
                 result = {'config': proposed, 'changes_applied': args.apply,
                     'next': 'Restart only uncrash.service after checking byte budgets'}
             print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
