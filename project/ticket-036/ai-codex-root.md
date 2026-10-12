@@ -1,0 +1,1 @@
+User requests .env SSOT and standards assessment. Literal contract aligns env-dsl and nohardcode environment/path rules. New defaults are configuration data; current runtime remains unchanged until application consumer and operational deployment are delivered.
