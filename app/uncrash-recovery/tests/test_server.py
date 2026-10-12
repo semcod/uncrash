@@ -36,7 +36,7 @@ class TransferTests(unittest.TestCase):
         self.calls = []
         self.now = 100
         self.interface = RecoveryInterface(
-            Config(self.root / 'state', bundle=self.bundle),
+            Config(self.root / 'state', bundle=self.bundle, host='fixture@loopback'),
             runner=self.transfer, clock=lambda: self.now, audit=lambda *_: None,
         )
 
@@ -53,7 +53,7 @@ class TransferTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
         result = self.interface.apply(plan['token'])
         self.assertTrue(result['transferred'])
-        self.assertEqual(self.calls, [('tom@minis', self.bundle.read_bytes())])
+        self.assertEqual(self.calls, [('fixture@loopback', self.bundle.read_bytes())])
         with self.assertRaises(Rejected):
             self.interface.apply(plan['token'])
         self.assertEqual(len(self.calls), 1)
@@ -134,7 +134,7 @@ class TransferTests(unittest.TestCase):
             return transfer(*args)
         self.interface.runner = replace_original
         self.interface.apply(self.interface.plan()['token'])
-        self.assertEqual(self.calls, [('tom@minis', old)])
+        self.assertEqual(self.calls, [('fixture@loopback', old)])
 
 
 class HTTPTests(unittest.TestCase):
@@ -383,6 +383,75 @@ class FramingDeadlineTests(unittest.TestCase):
 
     def test_fast_chunked_body_is_available(self):
         self.check("fast-chunked", True)
+
+
+
+
+class EnvironmentTests(unittest.TestCase):
+    def test_selected_settings_survive_worker_thread_and_explicit_backend_wins(self):
+        from unittest.mock import patch
+        from uncrash.configuration import activate_environment_file, reset_environment_file
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            env = root / '.env'
+            env.write_text('ENV_DSL_VERSION=1\nENV_DSL_NAMESPACE=UNCRASH\nENV_DSL_ENVIRONMENT=LOCAL\nENV_DSL_EXTENDS=BASE\nUNCRASH_APX_BACKEND_URL=http://127.0.0.1:19991/\nUNCRASH_APX_PREVIEW_TIMEOUT_MILLISECONDS=375\nUNCRASH_APX_TRANSFER_TIMEOUT_SECONDS=47\nUNCRASH_APX_TRANSFER_PROCESS_TIMEOUT_SECONDS=52\n')
+            inventory = root / 'sessions.json'
+            inventory.write_text(json.dumps([{'conversation_id': str(uuid.uuid4()), 'novnc_url': 'http://127.0.0.1:19992/vnc.html'}]))
+            inventory.chmod(0o600)
+            token = activate_environment_file(env)
+            try:
+                cfg = Config(root / 'state', sessions=inventory)
+                explicit = Config(root / 'state2', backend='http://127.0.0.1:19993/')
+                interface = RecoveryInterface(cfg, audit=lambda *_: None)
+            finally:
+                reset_environment_file(token)
+            self.assertEqual(cfg.backend, 'http://127.0.0.1:19991/')
+            self.assertEqual(explicit.backend, 'http://127.0.0.1:19993/')
+            rows = []
+            with patch('server.preview_available', return_value=True) as probe:
+                thread = threading.Thread(target=lambda: rows.append(interface.sessions()))
+                thread.start(); thread.join(2)
+                self.assertFalse(thread.is_alive())
+                probe.assert_called_once_with('http://127.0.0.1:19992/vnc.html', timeout=0.375)
+            self.assertEqual(rows[0]['sessions'][0]['status'], 'active')
+            with patch('server.subprocess.run') as run:
+                run.return_value = type('Result', (), {'returncode': 0, 'stdout': '{}'})()
+                interface.runner(('fixture-uncrash',), root / 'fixture.tar', 'fixture@loopback')
+                self.assertEqual(run.call_args.kwargs['timeout'], 52)
+                self.assertEqual(run.call_args.args[0][-1], '47')
+
+    def test_read_only_queries_need_no_implicit_transfer_destination(self):
+        from uncrash.configuration import activate_environment_file, reset_environment_file
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            env = root / '.env'
+            env.write_text('ENV_DSL_VERSION=1\nENV_DSL_NAMESPACE=UNCRASH\nENV_DSL_ENVIRONMENT=BASE\n')
+            token = activate_environment_file(env)
+            try:
+                interface = RecoveryInterface(Config(root / 'state'), audit=lambda *_: None)
+            finally:
+                reset_environment_file(token)
+            self.assertIsNone(interface.config.host)
+            self.assertEqual(interface.sessions(), {'sessions': []})
+            with self.assertRaisesRegex(Rejected, 'explicit SSH'):
+                interface.plan()
+
+    def test_main_uses_selected_env_and_explicit_cli_port_override(self):
+        from unittest.mock import patch
+        from server import main
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            env = root / '.env'
+            state = root / 'adapter'
+            env.write_text('ENV_DSL_VERSION=1\nENV_DSL_NAMESPACE=UNCRASH\nENV_DSL_ENVIRONMENT=LOCAL\nENV_DSL_EXTENDS=BASE\nUNCRASH_APX_PORT=19994\nUNCRASH_APX_STATE_DIR='+str(state)+'\n')
+            with patch.object(sys, 'argv', ['server', '--env-file', str(env)]), patch('server.serve') as serve:
+                main()
+                args = serve.call_args.args[0]
+                self.assertEqual(args.port, 19994)
+                self.assertEqual(args.state, state)
+            with patch.object(sys, 'argv', ['server', '--env-file', str(env), '--port', '19995']), patch('server.serve') as serve:
+                main()
+                self.assertEqual(serve.call_args.args[0].port, 19995)
 
 
 if __name__ == '__main__':

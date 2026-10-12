@@ -16,8 +16,9 @@ import tempfile
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from html.parser import HTMLParser
 from http.client import HTTPConnection, HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +26,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from logger import record
+from uncrash.configuration import activate_environment_file, reset_environment_file, runtime_settings
 
 ROOT = Path(__file__).resolve().parent
 MAX_BUNDLE = 128 * 1024 * 1024
@@ -107,11 +109,12 @@ class DeadlineSocket(socket.socket):
         return super().sendall(*args, **kwargs)
 
 
-def preview_available(value):
+def preview_available(value, *, timeout=None):
     """Check HTTP preview readiness; this does not attest an RFB connection."""
     url = urlsplit(loopback_url(value))
-    deadline = time.monotonic() + 0.2
-    connection = HTTPConnection(url.hostname, url.port, timeout=0.2)
+    timeout = runtime_settings()['apx_preview_timeout_milliseconds'] / 1000 if timeout is None else timeout
+    deadline = time.monotonic() + timeout
+    connection = HTTPConnection(url.hostname, url.port, timeout=timeout)
     try:
         connection.connect()
         connection.sock = DeadlineSocket(connection.sock, deadline)
@@ -179,10 +182,13 @@ def file_digest(stream, destination=None):
     return h.hexdigest(), total, before
 
 
-def transfer_cli(command, bundle, host):
+def transfer_cli(command, bundle, host, *, timeout=None, process_timeout=None):
+    settings = runtime_settings()
+    timeout = settings['apx_transfer_timeout_seconds'] if timeout is None else timeout
+    process_timeout = settings['apx_transfer_process_timeout_seconds'] if process_timeout is None else process_timeout
     result = subprocess.run(
-        [*command, 'bundle-transfer', str(bundle), '--host', host, '--timeout', '15'],
-        capture_output=True, timeout=30, check=False, text=True,
+        [*command, 'bundle-transfer', str(bundle), '--host', host, '--timeout', str(timeout)],
+        capture_output=True, timeout=process_timeout, check=False, text=True,
     )
     if result.returncode:
         raise Rejected('Backend transfer failed; obtain a fresh plan before retrying')
@@ -198,19 +204,28 @@ class Config:
     state: Path
     sessions: Path | None = None
     bundle: Path | None = None
-    host: str = 'tom@minis'
-    backend: str = 'http://127.0.0.1:18891/'
+    host: str | None = None
+    backend: str | None = None
     command: tuple = ('uncrash',)
+    settings: dict = field(default_factory=runtime_settings, init=False, compare=False, repr=False)
+
+    def __post_init__(self):
+        if self.backend is None:
+            object.__setattr__(self, 'backend', self.settings['apx_backend_url'])
+        if self.host is None:
+            object.__setattr__(self, 'host', self.settings.get('apx_ssh_host'))
 
 
 class RecoveryInterface:
     def __init__(self, config, *, runner=transfer_cli, clock=time.monotonic, audit=record):
-        self.config, self.runner, self.clock, self.audit = config, runner, clock, audit
+        self.config, self.clock, self.audit = config, clock, audit
+        self.runner = partial(transfer_cli, timeout=config.settings['apx_transfer_timeout_seconds'],
+                              process_timeout=config.settings['apx_transfer_process_timeout_seconds']) if runner is transfer_cli else runner
         self.lock = threading.Lock()
         self.plans = {}
         loopback_url(config.backend)
         import re
-        if not re.fullmatch(r'[a-zA-Z0-9_.-]+@[a-zA-Z0-9][a-zA-Z0-9_.-]*', config.host):
+        if config.host is not None and not re.fullmatch(r'[a-zA-Z0-9_.-]+@[a-zA-Z0-9][a-zA-Z0-9_.-]*', config.host):
             raise Rejected('Configure one explicit SSH host')
         state = confined_path(config.state)
         state.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -232,7 +247,7 @@ class RecoveryInterface:
         for row in rows:
             sid = str(uuid.UUID(row['conversation_id']))
             url = loopback_url(row['novnc_url'])
-            alive = preview_available(url)
+            alive = preview_available(url, timeout=self.config.settings['apx_preview_timeout_milliseconds'] / 1000)
             sessions.append({'id': sid, 'name': Path(row.get('cwd', '')).name or 'Sesja',
                              'url': url, 'status': 'active' if alive else 'stopped',
                              'fidelity': row.get('fidelity', 'persisted conversation'),
@@ -240,6 +255,8 @@ class RecoveryInterface:
         return {'sessions': sessions}
 
     def plan(self):
+        if self.config.host is None:
+            raise Rejected('Configure an explicit SSH destination before planning a transfer')
         if self.config.bundle is None:
             raise Rejected('No recovery bundle is configured')
         with private_file(self.config.bundle) as source:
@@ -303,7 +320,7 @@ def handler_for(interface):
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
             super().setup()
-            self.connection.settimeout(5)
+            self.connection.settimeout(interface.config.settings['apx_request_timeout_seconds'])
 
         def log_message(self, *_):
             pass
@@ -365,21 +382,33 @@ def handler_for(interface):
 
 
 def main():
-    # ssot.yaml is JSON (a YAML subset); the native server needs no YAML runtime.
-    ssot = json.loads((ROOT / 'ssot.yaml').read_text())
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--port', type=int, default=ssot['network']['default_port'])
-    parser.add_argument('--state', type=Path, default=Path.home() / '.local/state/uncrash-apx')
+    parser.add_argument('--env-file', type=Path)
+    parser.add_argument('--port', type=int)
+    parser.add_argument('--state', type=Path)
     parser.add_argument('--sessions-file', type=Path)
     parser.add_argument('--bundle', type=Path)
-    parser.add_argument('--host', default='tom@minis', help='Configured SSH destination, not the HTTP bind')
-    parser.add_argument('--backend', default=ssot['backend'])
+    parser.add_argument('--host', help='Configured SSH destination, not the HTTP bind')
+    parser.add_argument('--backend')
     args = parser.parse_args()
+    if args.env_file is not None and not args.env_file.exists():
+        parser.error('Selected environment file does not exist')
+    token = activate_environment_file(args.env_file)
+    try:
+        settings = runtime_settings()
+        args.port = args.port if args.port is not None else settings['apx_port']
+        args.state = args.state or Path(settings['apx_state_dir'])
+        return serve(args)
+    finally:
+        reset_environment_file(token)
+
+
+def serve(args):
     if not 1024 <= args.port <= 65535:
-        parser.error('Select a non-privileged port')
+        raise Rejected('Select a non-privileged port')
     command = shutil.which('uncrash')
     if not command:
-        parser.error('Install Uncrash before starting this adapter')
+        raise Rejected('Install Uncrash before starting this adapter')
     cfg = Config(args.state, args.sessions_file, args.bundle, args.host, args.backend, (command,))
     interface = RecoveryInterface(cfg)
     server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(interface))

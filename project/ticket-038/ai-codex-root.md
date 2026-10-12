@@ -1,0 +1,1 @@
+PLF-012 continuation after merged/deployed tickets036/037. Finish APX operational settings using the same typed environment consumer; preserve current daemon and24h expiry. Explicit session execution/publication authorization; no ownership transfer or remote effect inferred from tests.
