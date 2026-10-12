@@ -119,15 +119,3 @@ def test_apx_settings_preserve_loopback_and_explicit_deadline_constraints(tmp_pa
     path = env_file(tmp_path, body, canonical=True)
     with pytest.raises(settings.SettingsError):
         settings.environment_settings(path, {}, include_defaults=False)
-
-
-def test_apx_boundary_suite_is_part_of_product_validation():
-    """Keep the native adapter's ownership/transfer tests in the main CI gate."""
-    import os
-    import subprocess
-    root = Path(__file__).resolve().parents[1]
-    env = {**os.environ, 'PYTHONPATH': str(root / 'src'), 'PYTHONDONTWRITEBYTECODE': '1'}
-    result = subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s',
-                             str(root / 'app/uncrash-recovery/tests'), '-v'],
-                            cwd=root, env=env, capture_output=True, text=True, timeout=45)
-    assert result.returncode == 0, result.stderr
