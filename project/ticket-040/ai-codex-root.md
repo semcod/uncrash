@@ -1,0 +1,1 @@
+PLF012 JSON-only-structured-state continuation after protected39merge. Own cli and configuration tests only; explicit session execution/publication authorization. Use mocked discovery/private fixtures, not live profile application.

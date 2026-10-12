@@ -119,3 +119,29 @@ def test_apx_settings_preserve_loopback_and_explicit_deadline_constraints(tmp_pa
     path = env_file(tmp_path, body, canonical=True)
     with pytest.raises(settings.SettingsError):
         settings.environment_settings(path, {}, include_defaults=False)
+
+
+@pytest.mark.parametrize('has_environment', [True, False])
+def test_profile_selection_keeps_environment_out_of_persisted_json(tmp_path, monkeypatch, has_environment):
+    from uncrash import native
+    cfg = tmp_path / 'profiles.json'
+    original = {'profiles': [], 'compress': True, 'interval_seconds': 900,
+                'state_dir': str(tmp_path / 'old-store'), 'profile_metadata': {'label': 'fixture'}}
+    cfg.write_text(json.dumps(original)); cfg.chmod(0o600)
+    app = tmp_path / 'app'; app.mkdir()
+    selected = {'id': 'fixture', 'state_dir': str(app), 'argv': []}
+    monkeypatch.setattr(native, 'discover', lambda home=None: [selected])
+    path = tmp_path / '.env'
+    if has_environment:
+        env_file(tmp_path, 'UNCRASH_COMPRESS=false\nUNCRASH_INTERVAL_SECONDS=120\nUNCRASH_STATE_DIR='+str(tmp_path / 'new-store'), canonical=True)
+    monkeypatch.setenv('UNCRASH_ENV_FILE', str(path))
+    before = path.read_bytes() if has_environment else None
+    args = ['--config', str(cfg), '--state', str(tmp_path / 'store'),
+            'profiles', '--select', 'fixture', '--apply']
+    assert cli.main(args) == 0
+    saved = json.loads(cfg.read_text())
+    expected = {'profiles': [selected], 'profile_metadata': {'label': 'fixture'}} if has_environment else {**original, 'profiles': [selected]}
+    assert saved == expected
+    assert cfg.stat().st_mode & 0o777 == 0o600
+    assert 'apx_port' not in saved and 'rust_threads' not in saved
+    assert path.read_bytes() == before if has_environment else not path.exists()
