@@ -241,7 +241,9 @@ def _identity(proc, pid, expected_start):
 
 
 def inspect_health(*, log_dir=None, thread_dump=None, project=None, pid=None,
-                   expected_start=None, max_age_seconds=600, now=None, proc_root='/proc'):
+                   expected_start=None, max_age_seconds=None, now=None, proc_root='/proc'):
+    from .configuration import runtime_settings
+    max_age_seconds = runtime_settings()['health_max_age_seconds'] if max_age_seconds is None else max_age_seconds
     if isinstance(max_age_seconds, bool) or not isinstance(max_age_seconds, int) or not 1 <= max_age_seconds <= 86400:
         raise RecoveryError('Evidence freshness must be 1..86400 seconds')
     if (pid is None) != (expected_start is None) or (pid is not None and (type(pid) is not int or pid <= 0)):

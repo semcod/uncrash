@@ -18,11 +18,12 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from .store import RecoveryError, no_links, Store
+from .configuration import runtime_settings
 
 
 def _find_free_port() -> int:
     with socket.socket() as sock:
-        sock.bind(('127.0.0.1', 0))
+        sock.bind((runtime_settings()['preview_host'], 0))
         return sock.getsockname()[1]
 
 
@@ -47,7 +48,10 @@ def _temp_dir() -> Path:
     return fallback
 
 
-def _find_free_display(start: int = 150, end: int = 400) -> int:
+def _find_free_display(start: Optional[int] = None, end: Optional[int] = None) -> int:
+    settings = runtime_settings()
+    start = settings['preview_display_start'] if start is None else start
+    end = settings['preview_display_end'] if end is None else end
     for n in range(start, end):
         if not Path(f'/tmp/.X11-unix/X{n}').exists() and not Path(f'/tmp/.X{n}-lock').exists():
             return n
@@ -63,7 +67,7 @@ SUPPORTED_ENGINES: Dict[str, Dict[str, Any]] = {
         'badge': '🖥️ NATYWNY (Twinerd)',
         'description': 'Bezpośredni, lekki wirtualny pulpit X11 na hoście z TigerVNC i websockify.',
         'color': '#89b4fa',
-        'pkg_path': '/home/tom/github/twinerd/twinerd/packages/twinerd-mcp',
+        'path_setting': 'twinerd_native_path',
     },
     'kasm': {
         'id': 'kasm',
@@ -73,7 +77,7 @@ SUPPORTED_ENGINES: Dict[str, Dict[str, Any]] = {
         'badge': '📦 KASM WORKSPACE (twinerd-kasm)',
         'description': 'Izolowany kontenerowy workspace ze stagingiem plików manifestu i skryptów odzyskiwania przez twinerd-kasm.',
         'color': '#cba6f7',
-        'pkg_path': '/home/tom/github/twinerd/twinerd/packages/twinerd-kasm',
+        'path_setting': 'twinerd_kasm_path',
     },
     'clonebox': {
         'id': 'clonebox',
@@ -83,7 +87,7 @@ SUPPORTED_ENGINES: Dict[str, Dict[str, Any]] = {
         'badge': '🎛️ CLONEBOX VM (KVM/QEMU)',
         'description': 'Wirtualizacja maszyn z projektu clonebox (izolacja KVM, snapshoty RAM i dysków qcow2).',
         'color': '#fab387',
-        'pkg_path': '/home/tom/github/wronai/clonebox/src',
+        'path_setting': 'clonebox_path',
     },
     'clonebox-container': {
         'id': 'clonebox-container',
@@ -93,7 +97,7 @@ SUPPORTED_ENGINES: Dict[str, Dict[str, Any]] = {
         'badge': '🐳 CLONEBOX CONTAINER (Podman/Docker)',
         'description': 'Lekka konteneryzacja za pośrednictwem clonebox.container.ContainerCloner z detekcją runtime.',
         'color': '#94e2d5',
-        'pkg_path': '/home/tom/github/wronai/clonebox/src',
+        'path_setting': 'clonebox_path',
     },
     'pelorus': {
         'id': 'pelorus',
@@ -103,7 +107,7 @@ SUPPORTED_ENGINES: Dict[str, Dict[str, Any]] = {
         'badge': '🧭 PELORUS TWIN (twinerd-pelorus)',
         'description': 'Cyfrowy bliźniak i arbiter sesji współdzielonej kontroli z twinerd-pelorus.',
         'color': '#a6e3a1',
-        'pkg_path': '/home/tom/github/twinerd/twinerd/packages/twinerd-pelorus',
+        'path_setting': 'pelorus_path',
     },
 }
 
@@ -113,11 +117,12 @@ def get_virtualization_engines() -> List[Dict[str, Any]]:
     results = []
     for eid, info in SUPPORTED_ENGINES.items():
         is_avail = True
-        pkg_p = info.get('pkg_path')
+        pkg_p = runtime_settings()[info['path_setting']]
         if pkg_p and not Path(pkg_p).exists():
             is_avail = False
         results.append({
-            **info,
+            **{k: v for k, v in info.items() if k != 'path_setting'},
+            'pkg_path': pkg_p,
             'available': is_avail
         })
     return results
@@ -376,8 +381,11 @@ def setup_jetbrains_sandbox(workspace_dir: Path,
 class VirtualPreviewDesktop:
     """Manages an isolated virtual X11 display with TigerVNC and noVNC."""
 
-    def __init__(self, novnc_dir: Optional[Path] = None, *, width: int = 1280, height: int = 800):
-        default_novnc = Path(os.environ.get('UNCRASH_NOVNC_ASSETS', '/usr/share/novnc'))
+    def __init__(self, novnc_dir: Optional[Path] = None, *, width: Optional[int] = None, height: Optional[int] = None):
+        settings = runtime_settings()
+        default_novnc = Path(settings['novnc_assets'])
+        width = settings['preview_width'] if width is None else width
+        height = settings['preview_height'] if height is None else height
         self.novnc_dir = Path(novnc_dir or default_novnc).resolve()
         self.width = width
         self.height = height
@@ -441,9 +449,9 @@ class VirtualPreviewDesktop:
 
         # 4. Start websockify / twinerd-bridge
         if 'twinerd-bridge' in str(websockify_bin):
-            ws_cmd = [websockify_bin, '--listen', f'127.0.0.1:{self.ws_port}', '--target', f'127.0.0.1:{self.rfb_port}', '--web', str(self.novnc_dir)]
+            ws_cmd = [websockify_bin, '--listen', f"{runtime_settings()['preview_host']}:{self.ws_port}", '--target', f"{runtime_settings()['preview_host']}:{self.rfb_port}", '--web', str(self.novnc_dir)]
         else:
-            ws_cmd = [websockify_bin, '--web', str(self.novnc_dir), str(self.ws_port), f'127.0.0.1:{self.rfb_port}']
+            ws_cmd = [websockify_bin, '--web', str(self.novnc_dir), str(self.ws_port), f"{runtime_settings()['preview_host']}:{self.rfb_port}"]
         p_ws = subprocess.Popen(ws_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.processes.append(p_ws)
 
@@ -614,7 +622,7 @@ class VirtualPreviewDesktop:
         # Allow windows to map and decorate
         time.sleep(0.8)
 
-        novnc_url = f'http://127.0.0.1:{self.ws_port}/vnc.html?autoconnect=true&resize=scale'
+        novnc_url = f"http://{runtime_settings()['preview_host']}:{self.ws_port}/vnc.html?autoconnect=true&resize=scale"
         return {
             'display': display_str,
             'rfb_port': self.rfb_port,
@@ -833,7 +841,7 @@ class WorkspaceManager:
 
             if engine == "kasm":
                 try:
-                    kasm_pkg_path = "/home/tom/github/twinerd/twinerd/packages/twinerd-kasm"
+                    kasm_pkg_path = runtime_settings()['twinerd_kasm_path']
                     if kasm_pkg_path not in sys.path and Path(kasm_pkg_path).exists():
                         sys.path.insert(0, kasm_pkg_path)
                     from twinerd_kasm.workspace import KasmWorkspaceManager, WorkspaceProfile
@@ -871,7 +879,7 @@ class WorkspaceManager:
 
             elif engine == "clonebox":
                 try:
-                    cb_path = "/home/tom/github/wronai/clonebox/src"
+                    cb_path = runtime_settings()['clonebox_path']
                     if cb_path not in sys.path and Path(cb_path).exists():
                         sys.path.insert(0, cb_path)
                     cb_dir = Path("/tmp/clonebox_workspaces") / f"cb-{snapshot_id[:12]}-{uuid.uuid4().hex[:6]}"
@@ -888,7 +896,7 @@ class WorkspaceManager:
   <os><type arch="x86_64" machine="pc">hvm</type><boot dev="hd"/></os>
   <devices>
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
-    <graphics type="vnc" autoport="yes" listen="127.0.0.1"/>
+    <graphics type="vnc" autoport="yes" listen="{runtime_settings()['preview_host']}"/>
     <video><model type="vga"/></video>
     <input type="keyboard" bus="ps2"/>
   </devices>
@@ -943,7 +951,7 @@ isolation:
 
             elif engine == "clonebox-container":
                 try:
-                    cb_path = "/home/tom/github/wronai/clonebox/src"
+                    cb_path = runtime_settings()['clonebox_path']
                     if cb_path not in sys.path and Path(cb_path).exists():
                         sys.path.insert(0, cb_path)
                     detected = "docker"
@@ -1006,7 +1014,7 @@ CMD ["/bin/bash"]
 
             elif engine == "pelorus":
                 try:
-                    pelorus_path = "/home/tom/github/twinerd/twinerd/packages/twinerd-pelorus"
+                    pelorus_path = runtime_settings()['pelorus_path']
                     if pelorus_path not in sys.path and Path(pelorus_path).exists():
                         sys.path.insert(0, pelorus_path)
                     pel_dir = Path("/tmp/twinerd_pelorus_workspaces") / f"pelorus-{snapshot_id[:12]}-{uuid.uuid4().hex[:6]}"
@@ -1017,8 +1025,8 @@ CMD ["/bin/bash"]
                         "session_name": f"uncrash_pelorus_{snapshot_id[:12]}",
                         "student_id": "operator",
                         "lesson_id": "uncrash_recovery_twin",
-                        "display_width": 1280,
-                        "display_height": 800,
+                        "display_width": runtime_settings()["preview_width"],
+                        "display_height": runtime_settings()["preview_height"],
                         "max_staleness_ms": 2000
                     }
                     (pel_dir / "educational_session_config.json").write_text(json.dumps(session_cfg, indent=2))

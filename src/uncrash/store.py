@@ -114,7 +114,8 @@ def profiles(config):
 
 def sqlite_snapshot(path, file_limit):
     """Online backup includes committed WAL data without writing plaintext temp files."""
-    deadline = time.monotonic()+10
+    from .configuration import runtime_settings
+    deadline = time.monotonic()+runtime_settings()['sqlite_backup_timeout_seconds']
     source = destination = None
     try:
         source = sqlite3.connect('file:'+quote(str(no_links(path)), safe='/')+'?mode=ro', uri=True, timeout=1)
@@ -138,6 +139,7 @@ def sqlite_snapshot(path, file_limit):
 
 
 def build_native(root):
+    from .configuration import runtime_settings
     source = Path(__file__).with_name('snapshot.rs')
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     directory = private_dir(Path(root)/'native'/digest)
@@ -155,7 +157,7 @@ def build_native(root):
         if 'RUSTUP_HOME' not in compiler_env and toolchain_home.is_dir(): compiler_env['RUSTUP_HOME'] = str(toolchain_home)
         try:
             result = subprocess.run(['rustc', '--edition=2021', '-O', str(source), '-o', str(temporary)],
-                env=compiler_env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120)
+                env=compiler_env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=runtime_settings()['native_build_timeout_seconds'])
         except subprocess.TimeoutExpired as exc:
             raise RecoveryError('Rust worker build timed out') from exc
         if result.returncode:
@@ -191,6 +193,7 @@ def find_native_worker(root=None):
 
 
 def rust_capture(root, jobs, config, key):
+    from .configuration import runtime_settings
     if not jobs: return []
     binary = no_links(config['rust_binary']) if config.get('rust_binary') else (find_native_worker(root) or build_native(root))
     workers = int(config.get('rust_threads', 4))
@@ -205,7 +208,7 @@ def rust_capture(root, jobs, config, key):
             str(old.get('blob_size', 0)), str(old.get('blob_mtime_ns', 0)), old.get('encoding', 'raw')]))
     try:
         result = subprocess.run([str(binary)], input=('\n'.join(rows)+'\n').encode(),
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=600)
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=runtime_settings(config)['native_capture_timeout_seconds'])
     except subprocess.TimeoutExpired as exc:
         raise RecoveryError('Rust snapshot worker timed out; previous complete snapshots retained') from exc
     if result.returncode:

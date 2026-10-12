@@ -154,7 +154,8 @@ def recover_at_startup(store, config, display=None):
 def run_daemon(store, config, *, stop=None, display=None):
     stop = stop or threading.Event()
     recover_at_startup(store, config, display or config.get('recovery_display'))
-    interval = int(config.get('interval_seconds', 300))
+    from .configuration import runtime_settings
+    interval = int(runtime_settings(config)['interval_seconds'])
     if not 5 <= interval <= 86400: raise RecoveryError('Snapshot interval must be 5..86400 seconds')
     while not stop.is_set():
         started = time.monotonic()
