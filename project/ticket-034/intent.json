@@ -1,0 +1,28 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-034",
+  "summary": "Add app launch to workspace and grid-table view toggle to applications catalog",
+  "workstream": "application",
+  "classification": {
+    "kind": "SERVICE",
+    "priority": "P2",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-034/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "src/uncrash/web_ui.py",
+    "src/uncrash/api.py",
+    "src/uncrash/preview.py",
+    "tests/test_web_ui.py",
+    "tests/test_api.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null
+}

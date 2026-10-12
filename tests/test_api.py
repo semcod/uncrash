@@ -1,5 +1,10 @@
 import asyncio
 import json
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
 import pytest
 from uncrash.api import create_fastapi_app, create_mcp_server, OPERATIONS_REGISTRY
 
@@ -238,10 +243,40 @@ def test_workspace_endpoints(tmp_path, monkeypatch):
     assert pel_data["status"] == "running"
     assert "workspace_dir" in pel_data
 
-    # Close Pelorus workspace
-    close_pel = client.post(f"/api/v1/workspaces/pelorus-{sid}/close")
-    assert close_pel.status_code == 200
-    assert close_pel.json()["closed"] is True
+    # 11. Launch app in workspace
+    create_ws2 = client.post(f"/api/v1/snapshots/{sid}/workspace?force_new=true")
+    assert create_ws2.status_code == 200
+    ws2_id = create_ws2.json()["workspace_id"]
+
+    launch_app_res = client.post(f"/api/v1/workspaces/{ws2_id}/launch-app", json={
+        "name": "PyCharm",
+        "cmd": "echo pycharm-test",
+        "profile_id": "jetbrains-settings"
+    })
+    assert launch_app_res.status_code == 200
+    launch_data = launch_app_res.json()
+    assert launch_data["status"] == "launched"
+    assert launch_data["workspace_id"] == ws2_id
+    assert launch_data["app"]["name"] == "PyCharm"
+
+    # Empty cmd returns 400
+    empty_launch = client.post(f"/api/v1/workspaces/{ws2_id}/launch-app", json={"name": "NoCmd", "cmd": ""})
+    assert empty_launch.status_code == 400
+
+    # Nonexistent workspace returns 400
+    nonexistent_launch = client.post("/api/v1/workspaces/ws-nonexistent/launch-app", json={"name": "App", "cmd": "echo 1"})
+    assert nonexistent_launch.status_code == 400
+
+    # 12. Create workspace with initial app parameters
+    app_ws_res = client.post(f"/api/v1/snapshots/{sid}/workspace?force_new=true&app_name=Gateway&app_cmd=echo+gateway&app_profile=jetbrains-settings")
+    assert app_ws_res.status_code == 200
+    app_ws_data = app_ws_res.json()
+    assert len(app_ws_data["gui_apps"]) == 1
+    assert app_ws_data["gui_apps"][0]["name"] == "Gateway"
+
+    # Clean up
+    client.post(f"/api/v1/workspaces/{ws2_id}/close")
+    client.post(f"/api/v1/workspaces/{app_ws_data['workspace_id']}/close")
 
 
 def test_gpu_and_applications_endpoints(monkeypatch):

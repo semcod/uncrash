@@ -627,6 +627,48 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .app-card:hover {
       border-color: var(--accent);
     }
+    .apps-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8rem;
+    }
+    .apps-table th {
+      text-align: left;
+      padding: 10px 12px;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      background: var(--bg-surface);
+      border-bottom: 2px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    .apps-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      vertical-align: middle;
+    }
+    .apps-table tr:hover td {
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .apps-view-toggle .btn.active {
+      background: var(--accent);
+      color: #11111b;
+      font-weight: 700;
+      border-color: var(--accent);
+    }
+    .app-card-actions {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid #313244;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
     .metric-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -743,8 +785,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <div id="categoryPills" style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; align-items:center">
         </div>
-        <div style="margin-bottom:14px">
-          <input type="text" id="appFilterInput" class="search-input" placeholder="🔍 Szukaj aplikacji po nazwie, komendzie lub profilu..." oninput="renderFilteredApps()">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:14px">
+          <div style="flex:1; min-width:240px">
+            <input type="text" id="appFilterInput" class="search-input" placeholder="🔍 Szukaj aplikacji po nazwie, komendzie lub profilu..." oninput="renderFilteredApps()">
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+            <label for="appTargetWorkspaceSelect" style="font-size:0.8rem; color:var(--text-muted); font-weight:600">Docelowy workspace:</label>
+            <select id="appTargetWorkspaceSelect" class="search-input" style="padding:5px 10px; font-size:0.8rem; width:auto; min-width:220px; background:var(--bg-surface); color:var(--text-main); border:1px solid var(--border); border-radius:6px">
+              <option value="__new__">✨ Nowy workspace (kolejna maszyna)</option>
+            </select>
+            <div class="apps-view-toggle" style="display:flex; gap:4px; background:var(--bg-surface); padding:3px; border-radius:6px; border:1px solid var(--border)">
+              <button id="appsViewGridBtn" class="btn active" onclick="setAppsViewMode('grid')" title="Widok paneli / kafelków" style="padding:4px 10px; font-size:0.75rem">⊞ Panele</button>
+              <button id="appsViewTableBtn" class="btn" onclick="setAppsViewMode('table')" title="Widok tabeli z opcjami akcji" style="padding:4px 10px; font-size:0.75rem">☰ Tabela</button>
+            </div>
+          </div>
         </div>
         <div id="appsGrid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:10px;">
         </div>
@@ -1582,6 +1636,103 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       updateUrl({ cat: cat === 'all' ? null : cat });
     }
 
+    let currentAppsViewMode = 'grid';
+
+    function setAppsViewMode(mode) {
+      currentAppsViewMode = mode;
+      const gridBtn = document.getElementById('appsViewGridBtn');
+      const tableBtn = document.getElementById('appsViewTableBtn');
+      if (gridBtn) gridBtn.classList.toggle('active', mode === 'grid');
+      if (tableBtn) tableBtn.classList.toggle('active', mode === 'table');
+      renderFilteredApps();
+    }
+
+    function populateAppTargetWorkspaces() {
+      const select = document.getElementById('appTargetWorkspaceSelect');
+      if (!select) return;
+      const currentVal = select.value;
+      const opts = [
+        '<option value="__new__">✨ Nowy workspace (kolejna maszyna)</option>'
+      ];
+      (activeWorkspaces || []).forEach(ws => {
+        const sel = (ws.workspace_id === currentWorkspaceId) ? ' selected' : '';
+        const name = escapeHtml(ws.name || ws.workspace_id);
+        const disp = ws.display ? ` (${escapeHtml(ws.display)})` : '';
+        opts.push(`<option value="${escapeHtml(ws.workspace_id)}"${sel}>🖥️ ${name}${disp}</option>`);
+      });
+      select.innerHTML = opts.join('');
+      if (currentVal && Array.from(select.options).some(o => o.value === currentVal)) {
+        select.value = currentVal;
+      }
+    }
+
+    async function launchAppAction(appName, appCmd, appProfile) {
+      if (!appCmd) {
+        showToast('Aplikacja nie posiada zdefiniowanego polecenia CLI');
+        return;
+      }
+      const select = document.getElementById('appTargetWorkspaceSelect');
+      const target = select ? select.value : '__new__';
+
+      if (target === '__new__') {
+        const area = document.getElementById('previewArea');
+        if (area) {
+          area.innerHTML = `<div style="padding:16px; background:var(--bg-card); border-radius:8px">Uruchamianie aplikacji <strong>${escapeHtml(appName)}</strong> w nowym workspace...</div>`;
+        }
+        showToast(`Uruchamianie '${appName}' w nowym workspace...`);
+        toggleAppsModal();
+        try {
+          const snapshotId = currentSnapshotId || (snapshots[0] ? snapshots[0].id : 'latest');
+          const queryParams = new URLSearchParams({
+            force_new: 'true',
+            engine: 'native',
+            app_name: appName,
+            app_cmd: appCmd,
+            app_profile: appProfile || ''
+          });
+          const res = await fetch(`/api/v1/snapshots/${snapshotId}/workspace?${queryParams.toString()}`, { method: 'POST' });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${res.status}`);
+          }
+          const ws = await res.json();
+          currentWorkspaceId = ws.workspace_id;
+          updateUrl({ snapshot: snapshotId, action: 'workspace', workspace: ws.workspace_id, engine: ws.engine });
+          renderWorkspacePreview(ws);
+          await fetchWorkspaces();
+          showToast(`Aplikacja '${appName}' została uruchomiona w nowym workspace ${ws.workspace_id}!`);
+        } catch (err) {
+          if (area) area.innerHTML = `<div style="padding:16px; color:var(--red)">Błąd uruchamiania workspace z aplikacją: ${escapeHtml(err.message)}</div>`;
+          showToast(`Błąd uruchamiania aplikacji: ${err.message}`);
+        }
+      } else {
+        showToast(`Uruchamianie '${appName}' w workspace ${target}...`);
+        toggleAppsModal();
+        try {
+          const res = await fetch(`/api/v1/workspaces/${encodeURIComponent(target)}/launch-app`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: appName, cmd: appCmd, profile_id: appProfile })
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${res.status}`);
+          }
+          await selectWorkspace(target);
+          await fetchWorkspaces();
+          showToast(`Aplikacja '${appName}' uruchomiona w workspace ${target}!`);
+        } catch (err) {
+          showToast(`Błąd uruchamiania aplikacji w ${target}: ${err.message}`);
+        }
+      }
+    }
+
+    function copyAppCommand(cmd) {
+      if (!cmd) return;
+      copyText(cmd);
+      showToast('Skopiowano polecenie aplikacji do schowka!');
+    }
+
     function renderFilteredApps() {
       const grid = document.getElementById('appsGrid');
       if (!grid || !applicationsData) return;
@@ -1607,42 +1758,123 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
 
       if (list.length === 0) {
-        grid.innerHTML = '<div style="grid-column: 1 / -1; padding:32px; text-align:center; color:var(--text-muted)">Brak pasujących aplikacji w tej kategorii.</div>';
+        grid.style.display = 'block';
+        grid.innerHTML = '<div style="padding:32px; text-align:center; color:var(--text-muted)">Brak pasujących aplikacji w tej kategorii.</div>';
         return;
       }
 
-      grid.innerHTML = list.map(app => {
-        const meta = categoryMeta[app.category] || { icon: '📦', label: app.category };
-        const hasProfile = app.has_recovery_profile;
-        const profileBadge = hasProfile
-          ? `<span class="tag" style="background:rgba(166,227,161,0.2); color:var(--green); font-weight:700">✅ Profil: ${app.profile_id}</span>`
-          : `<span class="tag" style="background:rgba(166,173,200,0.12); color:var(--text-muted)">ℹ️ Systemowa</span>`;
+      if (currentAppsViewMode === 'table') {
+        const rows = list.map((app, idx) => {
+          const meta = categoryMeta[app.category] || { icon: '📦', label: app.category };
+          const hasProfile = app.has_recovery_profile;
+          const profileBadge = hasProfile
+            ? `<span class="tag" style="background:rgba(166,227,161,0.2); color:var(--green); font-weight:700">✅ Profil: ${escapeHtml(app.profile_id)}</span>`
+            : `<span class="tag" style="background:rgba(166,173,200,0.12); color:var(--text-muted)">ℹ️ Systemowa</span>`;
 
-        return `
-          <div class="app-card">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px">
-              <div>
-                <div style="font-weight:700; font-size:0.92rem; display:flex; align-items:center; gap:6px">
+          const appName = escapeHtml(app.name || 'Aplikacja');
+          const appCmd = escapeHtml(app.cmd || '');
+          const desktopFile = app.desktop_file ? escapeHtml(app.desktop_file.split('/').pop()) : '—';
+          const desktopFull = app.desktop_file ? escapeHtml(app.desktop_file) : '';
+
+          return `
+            <tr>
+              <td>
+                <div style="font-weight:700; display:flex; align-items:center; gap:6px">
                   <span>${meta.icon}</span>
-                  <span>${app.name}</span>
+                  <span>${appName}</span>
                 </div>
-                <div style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; font-weight:600; margin-top:2px">${meta.label}</div>
-              </div>
-              <div>${profileBadge}</div>
-            </div>
-            <div style="font-family:var(--font-mono); font-size:0.75rem; color:var(--yellow); background:#181825; padding:4px 8px; border-radius:4px; border:1px solid #313244; word-break:break-all">
-              ${app.cmd || 'brak polecenia cli'}
-            </div>
-            ${app.desktop_file ? `<div style="font-size:0.7rem; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title="${app.desktop_file}">📄 ${app.desktop_file}</div>` : ''}
+                <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; font-weight:600; margin-top:2px">${escapeHtml(meta.label)}</div>
+              </td>
+              <td>${profileBadge}</td>
+              <td>
+                <code style="font-family:var(--font-mono); font-size:0.75rem; color:var(--yellow); background:#181825; padding:4px 8px; border-radius:4px; border:1px solid #313244; word-break:break-all; display:inline-block">${appCmd || '<span style="color:var(--text-muted)">brak</span>'}</code>
+              </td>
+              <td>
+                <span style="font-size:0.72rem; color:var(--text-muted)" title="${desktopFull}">📄 ${desktopFile}</span>
+              </td>
+              <td>
+                <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap">
+                  <button id="app-launch-${idx}" class="btn btn-primary" style="padding:4px 8px; font-size:0.72rem; background:var(--accent); color:#11111b; font-weight:700" title="Uruchom w wybranym workspace">🚀 Uruchom</button>
+                  <button id="app-copy-${idx}" class="btn" style="padding:4px 8px; font-size:0.72rem" title="Skopiuj polecenie CLI">📋 Kopiuj</button>
+                </div>
+              </td>
+            </tr>
+          `;
+        }).join('');
+
+        grid.style.display = 'block';
+        grid.innerHTML = `
+          <div style="overflow-x:auto; background:var(--bg-card); border-radius:8px; border:1px solid var(--border)">
+            <table class="apps-table">
+              <thead>
+                <tr>
+                  <th>Aplikacja</th>
+                  <th>Profil odzyskiwania</th>
+                  <th>Polecenie CLI / Ścieżka</th>
+                  <th>Plik Desktop</th>
+                  <th style="min-width:160px">Opcje akcji</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows}
+              </tbody>
+            </table>
           </div>
         `;
-      }).join('');
+      } else {
+        grid.style.display = 'grid';
+        grid.innerHTML = list.map((app, idx) => {
+          const meta = categoryMeta[app.category] || { icon: '📦', label: app.category };
+          const hasProfile = app.has_recovery_profile;
+          const profileBadge = hasProfile
+            ? `<span class="tag" style="background:rgba(166,227,161,0.2); color:var(--green); font-weight:700">✅ Profil: ${escapeHtml(app.profile_id)}</span>`
+            : `<span class="tag" style="background:rgba(166,173,200,0.12); color:var(--text-muted)">ℹ️ Systemowa</span>`;
+
+          const appName = escapeHtml(app.name || 'Aplikacja');
+          const appCmd = escapeHtml(app.cmd || '');
+
+          return `
+            <div class="app-card">
+              <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px">
+                <div>
+                  <div style="font-weight:700; font-size:0.92rem; display:flex; align-items:center; gap:6px">
+                    <span>${meta.icon}</span>
+                    <span>${appName}</span>
+                  </div>
+                  <div style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; font-weight:600; margin-top:2px">${escapeHtml(meta.label)}</div>
+                </div>
+                <div>${profileBadge}</div>
+              </div>
+              <div style="font-family:var(--font-mono); font-size:0.75rem; color:var(--yellow); background:#181825; padding:4px 8px; border-radius:4px; border:1px solid #313244; word-break:break-all">
+                ${appCmd || 'brak polecenia cli'}
+              </div>
+              ${app.desktop_file ? `<div style="font-size:0.7rem; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title="${escapeHtml(app.desktop_file)}">📄 ${escapeHtml(app.desktop_file)}</div>` : ''}
+              <div class="app-card-actions">
+                <button id="app-launch-${idx}" class="btn btn-primary" style="padding:4px 10px; font-size:0.75rem; background:var(--accent); color:#11111b; font-weight:700">🚀 Uruchom w workspace</button>
+                <button id="app-copy-${idx}" class="btn" style="padding:4px 8px; font-size:0.75rem" title="Skopiuj polecenie CLI">📋 Kopiuj</button>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+
+      list.forEach((app, idx) => {
+        const launchBtn = document.getElementById(`app-launch-${idx}`);
+        if (launchBtn) {
+          launchBtn.onclick = () => launchAppAction(app.name || 'Aplikacja', app.cmd || '', app.profile_id || '');
+        }
+        const copyBtn = document.getElementById(`app-copy-${idx}`);
+        if (copyBtn) {
+          copyBtn.onclick = () => copyAppCommand(app.cmd || '');
+        }
+      });
     }
 
     function toggleAppsModal(category = null) {
       const modal = document.getElementById('appsModal');
       if (!modal) return;
       if (modal.style.display === 'none' || modal.style.display === '') {
+        populateAppTargetWorkspaces();
         if (category) {
           selectAppCategory(category);
         }
@@ -1669,6 +1901,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (modal === 'apps') {
         const modalEl = document.getElementById('appsModal');
         if (modalEl) modalEl.style.display = 'flex';
+        populateAppTargetWorkspaces();
         if (cat) selectAppCategory(cat);
       } else {
         const modalEl = document.getElementById('appsModal');
