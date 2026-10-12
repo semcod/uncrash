@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))
 import threading
 import sqlite3
 import time
@@ -358,5 +359,131 @@ def test_virtual_preview_desktop_missing_binary(tmp_path, monkeypatch):
     monkeypatch.setattr('shutil.which', lambda name: None)
     with pytest.raises(RecoveryError, match='executable not found'):
         desktop.start()
+
+
+def test_pidfd_send_signal_native_wrapper(monkeypatch):
+    from uncrash import runtime
+    import signal
+    sent = []
+    monkeypatch.setattr(signal, 'pidfd_send_signal', lambda fd, sig: sent.append((fd, sig)))
+    runtime.pidfd_send_signal(42, signal.SIGTERM)
+    assert sent == [(42, signal.SIGTERM)]
+
+
+def test_pidfd_send_signal_syscall_fallback(monkeypatch):
+    from uncrash import runtime
+    import ctypes
+    import platform
+    import signal
+    called = []
+    monkeypatch.delattr(signal, 'pidfd_send_signal', raising=False)
+    monkeypatch.setattr(sys, 'platform', 'linux')
+    monkeypatch.setattr(platform, 'machine', lambda: 'x86_64')
+
+    class FakeLibc:
+        def syscall(self, nr, fd, sig, info, flags):
+            called.append((nr, fd, sig, info, flags))
+            return 0
+    monkeypatch.setattr(ctypes, 'CDLL', lambda name, use_errno=True: FakeLibc())
+
+    runtime.pidfd_send_signal(55, signal.SIGTERM)
+    assert called == [(424, 55, int(signal.SIGTERM), None, 0)]
+
+
+def test_pidfd_send_signal_non_linux(monkeypatch):
+    from uncrash import runtime
+    import errno
+    import signal
+    monkeypatch.delattr(signal, 'pidfd_send_signal', raising=False)
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    with pytest.raises(OSError) as exc:
+        runtime.pidfd_send_signal(55, signal.SIGTERM)
+    assert exc.value.errno == errno.ENOSYS
+
+
+def test_pidfd_send_signal_unsupported_arch(monkeypatch):
+    from uncrash import runtime
+    import errno
+    import platform
+    import signal
+    monkeypatch.delattr(signal, 'pidfd_send_signal', raising=False)
+    monkeypatch.setattr(sys, 'platform', 'linux')
+    monkeypatch.setattr(platform, 'machine', lambda: 'mips64')
+    with pytest.raises(OSError) as exc:
+        runtime.pidfd_send_signal(55, signal.SIGTERM)
+    assert exc.value.errno == errno.ENOSYS
+
+
+def test_pidfd_send_signal_syscall_errors(monkeypatch):
+    from uncrash import runtime
+    import ctypes
+    import errno
+    import platform
+    import signal
+    monkeypatch.delattr(signal, 'pidfd_send_signal', raising=False)
+    monkeypatch.setattr(sys, 'platform', 'linux')
+    monkeypatch.setattr(platform, 'machine', lambda: 'x86_64')
+
+    current_errno = [errno.ESRCH]
+    class FakeLibc:
+        def syscall(self, nr, fd, sig, info, flags):
+            return -1
+    monkeypatch.setattr(ctypes, 'CDLL', lambda name, use_errno=True: FakeLibc())
+    monkeypatch.setattr(ctypes, 'get_errno', lambda: current_errno[0])
+
+    with pytest.raises(ProcessLookupError):
+        runtime.pidfd_send_signal(55, signal.SIGTERM)
+
+    current_errno[0] = errno.EPERM
+    with pytest.raises(PermissionError):
+        runtime.pidfd_send_signal(55, signal.SIGTERM)
+
+    current_errno[0] = errno.ENOSYS
+    with pytest.raises(OSError) as exc:
+        runtime.pidfd_send_signal(55, signal.SIGTERM)
+    assert exc.value.errno == errno.ENOSYS
+
+
+def test_launcher_stop_and_close_gui_app_fail_closed_on_nosys(fixture, tmp_path, monkeypatch):
+    from uncrash import recovery, runtime
+    import errno
+    from types import SimpleNamespace
+    _, store, config = fixture
+    launcher = Launcher(store)
+    launcher.save([{'id': 'app', 'pid': 12345, 'start_ticks': '9999'}])
+
+    monkeypatch.setattr(runtime, 'pidfd', lambda pid: 99)
+    monkeypatch.setattr(runtime, 'start_ticks', lambda pid: '9999')
+    def raise_nosys(fd, sig):
+        raise OSError(errno.ENOSYS, 'pidfd_send_signal not supported')
+    monkeypatch.setattr(runtime, 'pidfd_send_signal', raise_nosys)
+
+    with pytest.raises(RecoveryError, match='cannot safely signal a pinned process identity'):
+        launcher.stop()
+
+    monkeypatch.setattr(recovery, 'detected_gui_apps', lambda: [{'pid': 12345, 'start_ticks': '9999', 'name': 'test-app', 'comm': 'test'}])
+    monkeypatch.setattr(recovery, 'Path', lambda path: SimpleNamespace(stat=lambda: SimpleNamespace(st_uid=os.getuid())))
+    with pytest.raises(RecoveryError, match='cannot safely signal a pinned process identity'):
+        recovery.close_gui_app(pid=12345, expected_start='9999')
+
+
+def test_pidfd_send_signal_real_process_syscall_fallback(monkeypatch):
+    from uncrash import runtime
+    import signal
+    if sys.platform != 'linux':
+        return
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+    try:
+        fd = runtime.pidfd(child.pid)
+        try:
+            monkeypatch.delattr(signal, 'pidfd_send_signal', raising=False)
+            runtime.pidfd_send_signal(fd, signal.SIGTERM)
+            assert child.wait(timeout=5) == -signal.SIGTERM
+        finally:
+            os.close(fd)
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()
 
 

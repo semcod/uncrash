@@ -594,9 +594,10 @@ def detected_gui_apps(home=None, proc_root=Path('/proc')):
 
 def close_gui_app(pid=None, name=None, force=False, expected_start=None):
     """Terminate one explicitly identified application process, never select a window."""
+    import errno
     import select
     import signal
-    from .runtime import pidfd, start_ticks
+    from .runtime import pidfd, pidfd_send_signal, start_ticks
 
     if type(pid) is not int or pid <= 1 or not str(expected_start or '').isdecimal():
         raise RecoveryError('Process close requires an explicit PID and --start-ticks from apps --json; use window-close for one window')
@@ -605,24 +606,42 @@ def close_gui_app(pid=None, name=None, force=False, expected_start=None):
         raise RecoveryError('Application identity changed or is not a detected GUI process')
     if name and name.lower() not in (target['name'] + ' ' + target['comm']).lower():
         raise RecoveryError('Application name does not match the selected process')
-    if not hasattr(signal, 'pidfd_send_signal'):
-        raise RecoveryError('This platform cannot safely signal a pinned process identity')
-    descriptor = pidfd(pid)
+    try:
+        descriptor = pidfd(pid)
+    except ProcessLookupError as exc:
+        raise RecoveryError('Application identity changed or is not a detected GUI process') from exc
+    except OSError as exc:
+        if exc.errno == errno.ENOSYS:
+            raise RecoveryError('This platform cannot safely signal a pinned process identity') from exc
+        raise
     try:
         if Path(f'/proc/{pid}').stat().st_uid != os.getuid() or start_ticks(pid) != str(expected_start):
             raise RecoveryError('Application identity changed before signalling')
         poller = select.poll(); poller.register(descriptor, select.POLLIN)
-        signal.pidfd_send_signal(descriptor, signal.SIGTERM)
+        try:
+            pidfd_send_signal(descriptor, signal.SIGTERM)
+        except OSError as exc:
+            if exc.errno == errno.ENOSYS:
+                raise RecoveryError('This platform cannot safely signal a pinned process identity') from exc
+            raise
         sent = ['SIGTERM']; stopped = bool(poller.poll(1500))
         if not stopped and force:
-            signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+            try:
+                pidfd_send_signal(descriptor, signal.SIGKILL)
+            except OSError as exc:
+                if exc.errno == errno.ENOSYS:
+                    raise RecoveryError('This platform cannot safely signal a pinned process identity') from exc
+                raise
             sent.append('SIGKILL'); stopped = bool(poller.poll(1000))
         return {'status': 'closed' if stopped else 'still-running', 'pid': pid,
                 'name': target['name'], 'start_ticks': str(expected_start),
                 'method': sent[-1], 'signals_sent': sent, 'stopped': stopped,
                 'scope': 'entire-application-process; may contain multiple windows'}
     finally:
-        os.close(descriptor)
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
 
 
 def salvage_agent_session_db(source_path: Path, output_path: Path) -> dict:

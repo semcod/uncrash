@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import select
 import signal
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -25,13 +28,61 @@ def start_ticks(pid):
 def pidfd(pid):
     if hasattr(os, 'pidfd_open'):
         return os.pidfd_open(pid)
+    if sys.platform != 'linux':
+        raise OSError(errno.ENOSYS, 'pidfd_open is only supported on Linux')
     libc = ctypes.CDLL(None, use_errno=True)
-    fn = libc.pidfd_open
-    fn.argtypes = [ctypes.c_int, ctypes.c_uint]; fn.restype = ctypes.c_int
-    result = fn(pid, 0)
+    fn = getattr(libc, 'pidfd_open', None)
+    if fn is not None:
+        fn.argtypes = [ctypes.c_int, ctypes.c_uint]; fn.restype = ctypes.c_int
+        result = fn(pid, 0)
+    else:
+        machine = platform.machine().lower()
+        syscall_map = {
+            'x86_64': 434, 'amd64': 434, 'aarch64': 434, 'arm64': 434,
+            'armv7l': 434, 'armv8l': 434, 'i386': 434, 'i686': 434, 'riscv64': 434,
+        }
+        nr = syscall_map.get(machine)
+        if nr is None:
+            raise OSError(errno.ENOSYS, f'pidfd_open not supported on architecture {machine}')
+        syscall = libc.syscall
+        if hasattr(syscall, 'argtypes'):
+            syscall.argtypes = [ctypes.c_long, ctypes.c_int, ctypes.c_uint]
+            syscall.restype = ctypes.c_int
+        result = syscall(nr, pid, 0)
     if result < 0:
         code = ctypes.get_errno(); raise OSError(code, os.strerror(code))
     return result
+
+
+def pidfd_send_signal(fd, sig):
+    if hasattr(signal, 'pidfd_send_signal'):
+        return signal.pidfd_send_signal(fd, sig)
+    if sys.platform != 'linux':
+        raise OSError(errno.ENOSYS, 'pidfd_send_signal is only supported on Linux')
+    machine = platform.machine().lower()
+    syscall_map = {
+        'x86_64': 424,
+        'amd64': 424,
+        'aarch64': 424,
+        'arm64': 424,
+        'armv7l': 424,
+        'armv8l': 424,
+        'i386': 424,
+        'i686': 424,
+        'riscv64': 424,
+    }
+    nr = syscall_map.get(machine)
+    if nr is None:
+        raise OSError(errno.ENOSYS, f'pidfd_send_signal not supported on architecture {machine}')
+    libc = ctypes.CDLL(None, use_errno=True)
+    syscall = libc.syscall
+    if hasattr(syscall, 'argtypes'):
+        syscall.argtypes = [ctypes.c_long, ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint]
+        syscall.restype = ctypes.c_int
+    res = syscall(nr, fd, int(sig), None, 0)
+    if res < 0:
+        err = ctypes.get_errno()
+        raise OSError(err, os.strerror(err))
 
 
 class Launcher:
@@ -100,6 +151,10 @@ class Launcher:
                     fd = pidfd(record['pid'])
                 except ProcessLookupError:
                     continue
+                except OSError as exc:
+                    if exc.errno == errno.ENOSYS:
+                        raise RecoveryError('This platform cannot safely signal a pinned process identity') from exc
+                    raise
                 try:
                     try:
                         current = start_ticks(record['pid'])
@@ -108,15 +163,22 @@ class Launcher:
                     if current != record['start_ticks']:
                         raise RecoveryError('Process identity changed; refusing to signal it')
                     try:
-                        signal.pidfd_send_signal(fd, signal.SIGTERM)
+                        pidfd_send_signal(fd, signal.SIGTERM)
                     except ProcessLookupError:
                         continue
+                    except OSError as exc:
+                        if exc.errno == errno.ENOSYS:
+                            raise RecoveryError('This platform cannot safely signal a pinned process identity') from exc
+                        raise
                     if select.select([fd], [], [], 8)[0]:
                         stopped.append(record['id'])
                     else:
                         remaining.append(record)
                 finally:
-                    os.close(fd)
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
             self.save(remaining)
         if remaining:
             raise RecoveryError('An owned application did not stop; no forced global termination was attempted')
