@@ -30,6 +30,17 @@ class RecoveryError(ValueError):
     pass
 
 
+class SourceChangedError(RecoveryError):
+    """A verified unstable read; retry only by creating a fresh transaction."""
+
+
+def remaining_retry_time(deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise RecoveryError('Snapshot retry deadline exceeded; previous complete snapshots retained')
+    return remaining
+
+
 def no_links(path):
     path = Path(path).absolute()
     for item in (path, *path.parents):
@@ -112,10 +123,13 @@ def profiles(config):
     return result
 
 
-def sqlite_snapshot(path, file_limit):
+def sqlite_snapshot(path, file_limit, *, deadline=None):
     """Online backup includes committed WAL data without writing plaintext temp files."""
     from .configuration import runtime_settings
-    deadline = time.monotonic()+runtime_settings()['sqlite_backup_timeout_seconds']
+    timeout = runtime_settings()['sqlite_backup_timeout_seconds']
+    if deadline is not None:
+        timeout = min(timeout, remaining_retry_time(deadline))
+    deadline = time.monotonic() + timeout
     source = destination = None
     try:
         source = sqlite3.connect('file:'+quote(str(no_links(path)), safe='/')+'?mode=ro', uri=True, timeout=1)
@@ -138,7 +152,7 @@ def sqlite_snapshot(path, file_limit):
         if source is not None: source.close()
 
 
-def build_native(root):
+def build_native(root, *, deadline=None):
     from .configuration import runtime_settings
     source = Path(__file__).with_name('snapshot.rs')
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -156,8 +170,11 @@ def build_native(root):
         toolchain_home = Path(pwd.getpwuid(os.getuid()).pw_dir)/'.rustup'
         if 'RUSTUP_HOME' not in compiler_env and toolchain_home.is_dir(): compiler_env['RUSTUP_HOME'] = str(toolchain_home)
         try:
+            timeout = runtime_settings()['native_build_timeout_seconds']
+            if deadline is not None:
+                timeout = min(timeout, remaining_retry_time(deadline))
             result = subprocess.run(['rustc', '--edition=2021', '-O', str(source), '-o', str(temporary)],
-                env=compiler_env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=runtime_settings()['native_build_timeout_seconds'])
+                env=compiler_env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=timeout)
         except subprocess.TimeoutExpired as exc:
             raise RecoveryError('Rust worker build timed out') from exc
         if result.returncode:
@@ -195,7 +212,8 @@ def find_native_worker(root=None):
 def rust_capture(root, jobs, config, key):
     from .configuration import runtime_settings
     if not jobs: return []
-    binary = no_links(config['rust_binary']) if config.get('rust_binary') else (find_native_worker(root) or build_native(root))
+    deadline = config.get('_capture_retry_deadline')
+    binary = no_links(config['rust_binary']) if config.get('rust_binary') else (find_native_worker(root) or build_native(root, deadline=deadline))
     workers = int(config.get('rust_threads', 4))
     if not 1 <= workers <= 16: raise RecoveryError('Rust threads must be between 1 and 16')
     header = str(workers)+'\t'+(key.hex() if key else '-')+'\t'+str(int(config.get('compress', False)))
@@ -207,8 +225,11 @@ def rust_capture(root, jobs, config, key):
             ','.join(map(str, old.get('source_signature', []))) or '-', old.get('sha256', '-'),
             str(old.get('blob_size', 0)), str(old.get('blob_mtime_ns', 0)), old.get('encoding', 'raw')]))
     try:
+        timeout = runtime_settings(config)['native_capture_timeout_seconds']
+        if deadline is not None:
+            timeout = min(timeout, remaining_retry_time(deadline))
         result = subprocess.run([str(binary)], input=('\n'.join(rows)+'\n').encode(),
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=runtime_settings(config)['native_capture_timeout_seconds'])
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         raise RecoveryError('Rust snapshot worker timed out; previous complete snapshots retained') from exc
     if result.returncode:
@@ -239,7 +260,8 @@ def rust_capture(root, jobs, config, key):
         temporary = Path(root)/('.worker-error-'+uuid.uuid4().hex)
         write_file(temporary, json.dumps(diagnostic).encode())
         os.replace(temporary, Path(root)/'worker-error.json'); sync_dir(root)
-        raise RecoveryError(messages[reason])
+        error = SourceChangedError if reason == 'source-changed' else RecoveryError
+        raise error(messages[reason])
     records = [json.loads(line) for line in result.stdout.splitlines()]
     if len(records) != len(jobs) or [x['index'] for x in records] != list(range(len(jobs))):
         raise RecoveryError('Invalid Rust snapshot worker response')
@@ -265,10 +287,19 @@ class Store:
         self.encryption = encrypt
 
     @contextmanager
-    def lock(self):
+    def lock(self, *, deadline=None):
         fd = os.open(self.root/'lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            if deadline is None:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            else:
+                while True:
+                    remaining = remaining_retry_time(deadline)
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        time.sleep(min(remaining, 0.05))
             yield
         finally:
             os.close(fd)
@@ -309,6 +340,27 @@ class Store:
         return sorted(p.name for p in self.snapshots.iterdir() if p.is_dir() and not p.name.startswith('.') and ((p/'manifest.enc').is_file() or ((p/'manifest.json').is_file() and (p/'manifest.sha256').is_file())))
 
     def capture(self, config):
+        from .configuration import runtime_settings
+        settings = runtime_settings(config)
+        started = time.monotonic()
+        deadline = None
+        for attempt in range(settings['capture_attempts']):
+            try:
+                result = self._capture_once(config, deadline=deadline)
+                result['duration_seconds'] = round(time.monotonic() - started, 3)
+                if attempt:
+                    result['capture_attempts'] = attempt + 1
+                return result
+            except SourceChangedError:
+                if attempt + 1 == settings['capture_attempts']:
+                    raise
+                if deadline is None:
+                    deadline = time.monotonic() + settings['capture_retry_timeout_seconds']
+                remaining_retry_time(deadline)
+
+    def _capture_once(self, config, *, deadline=None):
+        if deadline is not None:
+            remaining_retry_time(deadline)
         started = time.monotonic()
         selected = profiles(config)
         encryption = config.get('encrypt', False)
@@ -329,7 +381,7 @@ class Store:
             raise RecoveryError('Compression must be explicitly true or false')
         if limit <= 0 or file_limit <= 0 or disk_limit <= 0 or not 1 <= keep <= 10000:
             raise RecoveryError('Invalid snapshot bounds')
-        with self.lock():
+        with self.lock(deadline=deadline):
             key = self.key() if encryption else None
             cipher = AESGCM(key) if key else None
             old_files = {}; previous_path = None
@@ -362,6 +414,8 @@ class Store:
                     databases = set(app.get('sqlite_backup_files', []))
                     captured_databases = set()
                     for directory, dirs, names in os.walk(source, followlinks=False):
+                        if deadline is not None:
+                            remaining_retry_time(deadline)
                         base = Path(directory)
                         for name in list(dirs):
                             includes = app.get('include_globs', [])
@@ -384,6 +438,8 @@ class Store:
                             else:
                                 directories.append((base/name).relative_to(source).as_posix())
                         for name in sorted(names):
+                            if deadline is not None:
+                                remaining_retry_time(deadline)
                             rel = (base/name).relative_to(source).as_posix()
                             includes = app.get('include_globs', [])
                             if includes and not any(matches_path(rel, pattern) for pattern in includes):
@@ -416,7 +472,7 @@ class Store:
                                 if is_sqlite:
                                     if stream.read(16) != b'SQLite format 3\x00':
                                         raise RecoveryError('Configured SQLite file is not a SQLite database')
-                                    data = sqlite_snapshot(path, file_limit)
+                                    data = sqlite_snapshot(path, file_limit) if deadline is None else sqlite_snapshot(path, file_limit, deadline=deadline)
                                     if rel in databases: captured_databases.add(rel)
                                 else:
                                     data = stream.read(file_limit+1)
@@ -427,7 +483,7 @@ class Store:
                                 if (before.st_dev, before.st_ino) != (current.st_dev, current.st_ino):
                                     raise RecoveryError('SQLite file was replaced while captured; retry later')
                             elif signature(before) != signature(after) or signature(before) != signature(current) or len(data) != before.st_size:
-                                raise RecoveryError('Application file changed while being captured; retry later')
+                                raise SourceChangedError('Application file changed while being captured; retry later')
                             total += len(data)
                             if total > limit:
                                 raise RecoveryError('Snapshot byte budget exceeded')
@@ -456,7 +512,12 @@ class Store:
                     if captured_databases != databases:
                         raise RecoveryError('A configured SQLite backup file is missing or excluded')
                     manifest['profiles'].append({'id': app['id'], 'files': files, 'directories': directories, 'excluded_entries': skipped})
-                for job, result in zip(jobs, rust_capture(self.root, jobs, config, key)):
+                worker_config = config
+                if deadline is not None:
+                    from .configuration import runtime_settings
+                    worker_config = {**config, '_capture_retry_deadline': deadline, 'native_capture_timeout_seconds': min(
+                        runtime_settings(config)['native_capture_timeout_seconds'], remaining_retry_time(deadline))}
+                for job, result in zip(jobs, rust_capture(self.root, jobs, worker_config, key)):
                     result.pop('index'); job['record'].update(result)
                 total = sum(f['size'] for app in manifest['profiles'] for f in app['files'])
                 if total > limit:
@@ -471,6 +532,8 @@ class Store:
                 if newest_size > disk_limit:
                     raise RecoveryError('Encrypted snapshot exceeds the total storage budget')
                 sync_dir(stage)
+                if deadline is not None:
+                    remaining_retry_time(deadline)
                 os.replace(stage, self.snapshots/sid); sync_dir(self.snapshots)
                 retained = self.list()
                 for old in retained[:-keep]:
