@@ -208,17 +208,38 @@ def rust_capture(root, jobs, config, key):
             str(old.get('blob_size', 0)), str(old.get('blob_mtime_ns', 0)), old.get('encoding', 'raw')]))
     try:
         result = subprocess.run([str(binary)], input=('\n'.join(rows)+'\n').encode(),
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=runtime_settings(config)['native_capture_timeout_seconds'])
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=runtime_settings(config)['native_capture_timeout_seconds'])
     except subprocess.TimeoutExpired as exc:
         raise RecoveryError('Rust snapshot worker timed out; previous complete snapshots retained') from exc
     if result.returncode:
         failed_index = len(result.stdout.splitlines())
+        messages = {
+            'source-changed': 'Application file changed while Rust captured it; retry later',
+            'byte-budget': 'Rust snapshot file byte budget exceeded',
+            'unsafe-source': 'Rust snapshot worker refused an unsafe source',
+            'source-unreadable': 'Rust snapshot worker refused an unreadable source',
+            'worker-failed': 'Rust snapshot worker refused operation; previous complete snapshots retained',
+        }
+        reason = 'worker-failed'
+        stderr = result.stderr or b''
+        if len(stderr) <= 1024:
+            try:
+                detail = json.loads(stderr.splitlines()[0])
+                if (isinstance(detail, dict) and set(detail) == {'schema', 'index', 'reason'}
+                        and detail['schema'] == 'uncrash.worker-error/v1'
+                        and type(detail['index']) is int and detail['index'] == failed_index
+                        and 0 <= failed_index < len(jobs)
+                        and isinstance(detail['reason'], str) and detail['reason'] in messages):
+                    reason = detail['reason']
+            except (ValueError, IndexError):
+                pass
         diagnostic = {'engine': 'rust', 'failed_index': failed_index, 'returncode': result.returncode,
+            'reason': reason,
             'source_sha256': hashlib.sha256(os.fsencode(jobs[failed_index]['source'])).hexdigest() if failed_index < len(jobs) else None}
         temporary = Path(root)/('.worker-error-'+uuid.uuid4().hex)
         write_file(temporary, json.dumps(diagnostic).encode())
         os.replace(temporary, Path(root)/'worker-error.json'); sync_dir(root)
-        raise RecoveryError('Rust snapshot worker refused an unstable, unsafe or oversized file')
+        raise RecoveryError(messages[reason])
     records = [json.loads(line) for line in result.stdout.splitlines()]
     if len(records) != len(jobs) or [x['index'] for x in records] != list(range(len(jobs))):
         raise RecoveryError('Invalid Rust snapshot worker response')
