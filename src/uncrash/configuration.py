@@ -48,6 +48,8 @@ FIELDS = {
     'UNCRASH_TRANSFER_TIMEOUT_SECONDS': ('transfer_timeout_seconds', 'int', '600'),
     'UNCRASH_NATIVE_BUILD_TIMEOUT_SECONDS': ('native_build_timeout_seconds', 'int', '120'),
     'UNCRASH_NATIVE_CAPTURE_TIMEOUT_SECONDS': ('native_capture_timeout_seconds', 'int', '600'),
+    'UNCRASH_CAPTURE_ATTEMPTS': ('capture_attempts', 'int', '1'),
+    'UNCRASH_CAPTURE_RETRY_TIMEOUT_SECONDS': ('capture_retry_timeout_seconds', 'int', '120'),
     'UNCRASH_SQLITE_BACKUP_TIMEOUT_SECONDS': ('sqlite_backup_timeout_seconds', 'int', '10'),
     'UNCRASH_APX_PORT': ('apx_port', 'port', '18893'),
     'UNCRASH_APX_BACKEND_URL': ('apx_backend_url', 'loopback_http', 'http://127.0.0.1:18891/'),
@@ -127,6 +129,10 @@ def _convert(name, value):
 
 
 def _validate(settings):
+    if type(settings.get('capture_attempts', 1)) is not int or not 1 <= settings.get('capture_attempts', 1) <= 3:
+        raise SettingsError('Capture attempts must be between 1 and 3')
+    if type(settings.get('capture_retry_timeout_seconds', 120)) is not int or not 1 <= settings.get('capture_retry_timeout_seconds', 120) <= 600:
+        raise SettingsError('Capture retry deadline must be between 1 and 600 seconds')
     if settings.get('apx_port', 18893) < 1024:
         raise SettingsError('ENV-SECURITY-001: APX must use a non-privileged port')
     if settings.get('apx_transfer_process_timeout_seconds', 30) <= settings.get('apx_transfer_timeout_seconds', 15):
