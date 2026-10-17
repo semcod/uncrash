@@ -122,6 +122,17 @@ class Launcher:
                         raise RecoveryError('Owned applications are already running; stop them first')
                 except FileNotFoundError:
                     pass
+            def _spawn_restored_app(cmd_args, cwd_path, proc_env):
+                return subprocess.Popen(
+                    cmd_args,
+                    cwd=cwd_path,
+                    env=proc_env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+
             launched = []
             try:
                 for app in receipt['restored']:
@@ -134,8 +145,7 @@ class Launcher:
                         'XDG_CONFIG_HOME': str(home/'.config'), 'XDG_CACHE_HOME': str(home/'.cache'),
                         'XDG_DATA_HOME': str(home/'.local/share'), 'UNCRASH_STATE_DIR': str(home)})
                     cmd = [s.replace('{state_dir}', str(home)).replace('{display}', display) for s in argv]
-                    proc = subprocess.Popen(cmd, cwd=home, env=env, stdin=subprocess.DEVNULL,
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                    proc = _spawn_restored_app(cmd, home, env)
                     record = {'id': app['id'], 'pid': proc.pid, 'start_ticks': start_ticks(proc.pid)}
                     launched.append(record); self.save(launched)
             except BaseException:

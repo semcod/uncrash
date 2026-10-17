@@ -48,10 +48,10 @@ def _temp_dir() -> Path:
     return fallback
 
 
-def _find_free_display(start: Optional[int] = None, end: Optional[int] = None) -> int:
+def _find_free_display(*bounds: Optional[int]) -> int:
     settings = runtime_settings()
-    start = settings['preview_display_start'] if start is None else start
-    end = settings['preview_display_end'] if end is None else end
+    start = bounds[0] if len(bounds) > 0 and bounds[0] is not None else settings['preview_display_start']
+    end = bounds[1] if len(bounds) > 1 and bounds[1] is not None else settings['preview_display_end']
     for n in range(start, end):
         if not Path(f'/tmp/.X11-unix/X{n}').exists() and not Path(f'/tmp/.X{n}-lock').exists():
             return n
@@ -394,6 +394,14 @@ class VirtualPreviewDesktop:
         self.ws_port: Optional[int] = None
         self.processes: List[subprocess.Popen] = []
 
+    def _spawn_process(self, cmd: List[str], *, env: Dict[str, str], devnull: bool = True) -> None:
+        kwargs: Dict[str, Any] = {'env': env}
+        if devnull:
+            kwargs['stdout'] = subprocess.DEVNULL
+            kwargs['stderr'] = subprocess.DEVNULL
+        p_proc = subprocess.Popen(cmd, **kwargs)
+        self.processes.append(p_proc)
+
     def start(self,
               summary_text: Optional[str] = None,
               terminal_tabs: Optional[List[Dict[str, Any]]] = None,
@@ -490,8 +498,7 @@ class VirtualPreviewDesktop:
                         '-fg', fg,
                         '-e', 'bash', '-c', sh_cmd
                     ]
-                    p_tab = subprocess.Popen(tab_cmd, env=env)
-                    self.processes.append(p_tab)
+                    self._spawn_process(tab_cmd, env=env, devnull=False)
 
                 if workspace_dir and Path(workspace_dir).exists():
                     engine_meta = SUPPORTED_ENGINES.get(engine, SUPPORTED_ENGINES['native'])
@@ -533,8 +540,7 @@ class VirtualPreviewDesktop:
                         '-hold',
                         '-e', 'cat', str(tab_file)
                     ]
-                    p_tab = subprocess.Popen(tab_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    self.processes.append(p_tab)
+                    self._spawn_process(tab_cmd, env=env)
 
                 if summary_text:
                     summary_file = _temp_dir() / f'.uncrash-preview-{self.display}.txt'
@@ -577,8 +583,7 @@ class VirtualPreviewDesktop:
                         if proj_path:
                             cmd.append(str(proj_path))
                         try:
-                            p_app = subprocess.Popen(cmd, env=app_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                            self.processes.append(p_app)
+                            self._spawn_process(cmd, env=app_env)
                         except OSError:
                             pass
 
@@ -606,16 +611,14 @@ class VirtualPreviewDesktop:
                             '-e', 'bash', '-c', f"cat '{info_file}'; exec bash"
                         ]
                         try:
-                            p_info = subprocess.Popen(info_term_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                            self.processes.append(p_info)
+                            self._spawn_process(info_term_cmd, env=env)
                         except OSError:
                             pass
                 elif app.get('command'):
                     cmd = app['command']
                     app_env = {**env, 'DISPLAY': display_str}
                     try:
-                        p_app = subprocess.Popen(cmd, env=app_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        self.processes.append(p_app)
+                        self._spawn_process(cmd, env=app_env)
                     except OSError:
                         pass
 
@@ -1239,6 +1242,8 @@ def preview_snapshot(store: Store,
     """Inspect snapshot metadata, generate tab launch configurations, and optionally display via noVNC."""
     sid, path, cipher, manifest = store.load(snapshot)
     metadata = extract_preview_metadata(manifest, sid)
+    if config and isinstance(config, dict) and not metadata.get('profiles') and 'profiles' in config:
+        metadata['profiles'] = list(config['profiles'])
 
     if launch_tabs:
         metadata['tabs_launch_result'] = launch_terminal_tabs(metadata['terminal_tabs'], dry_run=dry_run)

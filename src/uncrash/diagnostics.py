@@ -454,7 +454,8 @@ def provider_inventory(home, check_integrity=False, state_root=None):
     unavailable_dbs = []
     try:
         connection = sqlite3.connect('file:' + quote(str(no_links(summary)), safe='/') + '?mode=ro', uri=True, timeout=1)
-        rows = [r[0] for r in connection.execute('SELECT conversation_id FROM conversation_summaries')]
+        summary_rows = connection.execute('SELECT conversation_id FROM conversation_summaries').fetchall()
+        rows = [r[0] for r in summary_rows]
         valid = {r for r in rows if isinstance(r, str)}
         if check_integrity:
             conv_dir = root / 'conversations'
@@ -534,7 +535,7 @@ def snapshot_health(state, interval=300, now=None):
             if (directory / 'manifest.enc').is_file(): encrypted.append(directory.name)
             continue  # Encrypted copies need an explicit key-aware audit.
         try:
-            data, raw = _read_json(manifest)
+            data, raw = _read_json(manifest, maximum=32 * 1024**2)
             if hashlib.sha256(raw).hexdigest() != _read_regular_bytes(directory / 'manifest.sha256', 4096).decode().strip():
                 raise ValueError('checksum mismatch')
             if data.get('schema') != 'uncrash.snapshot/v1' or data.get('id') != directory.name:
