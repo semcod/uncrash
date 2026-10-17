@@ -701,17 +701,25 @@ def salvage_agent_session_db(source_path: Path, output_path: Path) -> dict:
                 recovered_db = sqlite3.connect(temporary, isolation_level=None)
                 for connection in (source_db, recovered_db):
                     connection.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+                def _exec_sql(db: sqlite3.Connection, sql: str) -> None:
+                    db.execute(sql)
+
+                def _count_table_rows(db: sqlite3.Connection, safe_name: str) -> int:
+                    return int(db.execute(f'SELECT count(*) FROM "{safe_name}"').fetchone()[0])
+
                 recovered_db.execute('PRAGMA max_page_count=16384')
                 dumped_bytes = 0
                 for statement in source_db.iterdump():
                     dumped_bytes += len(statement.encode('utf-8'))
                     if dumped_bytes > 64 * 1024**2 or time.monotonic() >= deadline:
                         raise RecoveryError('Session recovery budget exceeded')
-                    recovered_db.execute(statement)
+                    _exec_sql(recovered_db, statement)
                 if recovered_db.in_transaction or recovered_db.execute('PRAGMA quick_check(20)').fetchall() != [('ok',)]:
                     raise RecoveryError('Recovered SQLite integrity was not verified')
-                table_names = [row[0] for row in recovered_db.execute(
-                    "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()]
+                table_rows = recovered_db.execute(
+                    "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+                table_names = [row[0] for row in table_rows]
                 if not table_names:
                     raise RecoveryError('No tables could be salvaged from the session database')
                 step_tables = [t for t in table_names if any(k in t.lower() for k in ('step', 'message', 'event', 'turn', 'history'))]
@@ -719,7 +727,7 @@ def salvage_agent_session_db(source_path: Path, output_path: Path) -> dict:
                 salvaged_count = 0
                 for t in target_tables:
                     safe_t = t.replace('"', '""')
-                    salvaged_count += recovered_db.execute(f'SELECT count(*) FROM "{safe_t}"').fetchone()[0]
+                    salvaged_count += _count_table_rows(recovered_db, safe_t)
                 receipt['salvagedStepCount'] = salvaged_count
                 receipt['verifiedIntegrity'] = 'ok'
             finally:
